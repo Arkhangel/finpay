@@ -1,0 +1,19 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Idea
+/.idea
+
+# Virtual environments
+/.venv/
+/.config/local.toml
+/.config/dev.toml
+/.config/production.toml
+/.config/logging_local.yaml
+/.coverage
+/data/transactions.db

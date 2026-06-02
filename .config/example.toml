@@ -1,0 +1,6 @@
+project_name = "FinPay"
+
+[openai]
+api_key = ""
+host = "https://api.groq.com/openai/v1"
+model = ""

@@ -1,0 +1,57 @@
+version: 1
+disable_existing_loggers: True
+
+formatters:
+  base_formatter:
+    format: "{
+      \"asctime\": %(asctime)s,
+      \"levelname\": %(levelname)s,
+      \"processName\": %(processName)s,
+      \"process\": %(process)s,
+      \"thread\": %(thread)s,
+      \"name\": %(name)s,
+      \"module\": %(module)s,
+      \"funcName\": %(funcName)s,
+      \"message\": %(message)s
+    }"
+
+handlers:
+  console_handler:
+    class: "logging.StreamHandler"
+    level: "INFO"
+    formatter: "base_formatter"
+
+root:
+  level: "DEBUG"
+  handlers: ["console_handler"]
+  propagate: yes
+
+loggers:
+  main:
+    level: "DEBUG"
+    handlers: ["console_handler"]
+    propagate: no
+    taskiq:
+      level: "INFO"
+      handlers: ["console_handler"]
+      propagate: no
+    kafka:
+      level: "INFO"
+      handlers: ["console_handler"]
+      propagate: no
+    aiokafka:
+      level: "INFO"
+      handlers: ["console_handler"]
+      propagate: no
+    uvicorn:
+      handlers: ["console_handler"]
+      level: INFO
+      propagate: no
+    uvicorn.error:
+      handlers: ["console_handler"]
+      level: INFO
+      propagate: no
+    uvicorn.access:
+      handlers: ["console_handler"]
+      level: INFO
+      propagate: no

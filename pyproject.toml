@@ -1,0 +1,12 @@
+[project]
+name = "finpay"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "openai>=1.30",
+    "pydantic-settings>=2.0",
+    "jinja2>=3.1",
+    "requests>=2.31",
+    "jsonschema>=4.0",
+    "pyyaml>=6.0.3",
+]
