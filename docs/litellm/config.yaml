@@ -1,0 +1,46 @@
+# LiteLLM Proxy — конфиг для FinPay Support Assistant
+# Запуск: litellm --config docs/litellm/config.yaml
+# Эндпоинт: http://localhost:4000/v1/chat/completions
+
+model_list:
+  # ① Primary — Groq: минимальная latency, низкая стоимость
+  - model_name: finpay-chat
+    litellm_params:
+      model: groq/llama-3.3-70b-versatile
+      api_key: os.environ/GROQ_API_KEY
+    model_info:
+      id: groq-primary
+      description: "Primary: Groq llama-3.3-70b — fast & cheap"
+
+  # ② Fallback — OpenAI: высокая надёжность SLA 99.9%
+  - model_name: finpay-chat-fallback
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      id: openai-fallback
+      description: "Fallback: OpenAI gpt-4o-mini — reliable"
+
+router_settings:
+  routing_strategy: simple-shuffle
+
+  # Fallback chain: при ошибке primary → переключаемся на fallback
+  fallbacks:
+    - finpay-chat:
+        - finpay-chat-fallback
+
+  # Retry перед переходом к следующему провайдеру
+  num_retries: 2
+  retry_after: 3        # секунд между попытками
+
+  # Circuit Breaker: после 5 ошибок — cooldown 60 с
+  allowed_fails: 5
+  cooldown_time: 60
+
+litellm_settings:
+  request_timeout: 30   # секунд; при превышении — ошибка и retry
+  drop_params: true      # игнорировать неизвестные параметры провайдера
+
+general_settings:
+  # master_key включать только с БД (Prisma); для локального запуска — отключён
+  # В prod: master_key: os.environ/LITELLM_MASTER_KEY
