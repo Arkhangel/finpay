@@ -8,6 +8,7 @@ from pydantic_settings import SettingsConfigDict, BaseSettings, PydanticBaseSett
     SettingsError
 
 from app.settings.openai import OpenAISettings
+from app.settings.redis import RedisSettings
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,13 @@ class Settings(BaseSettings):
     project_name: str = "FinPay"
 
     openai: OpenAISettings = OpenAISettings()
+    redis: RedisSettings = RedisSettings()
+    cors_origins: list[str] = ["http://localhost:3000"]
+
+    host: str = "127.0.0.1"
+    port: int = 8000
+    workers: int = 1
+    reload: bool = False
 
     model_config = SettingsConfigDict(
         toml_file=f".config/{environment}.toml",
