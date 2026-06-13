@@ -15,4 +15,13 @@ dependencies = [
     "redis[asyncio]>=5.0",
     "httpx>=0.27",
     "tenacity>=9.0",
+    "structlog>=24.0",
+    "arize-phoenix-otel>=0.6",
+    "openinference-instrumentation-openai>=0.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
 ]

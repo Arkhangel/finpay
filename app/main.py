@@ -25,6 +25,7 @@ from app.exceptions.handlers import setup_exception_handlers
 from app.lifespan import lifespan
 from app.routers import chat, health, models
 from app.settings import settings
+from app.settings.logging import request_id_var
 
 logger = logging.getLogger("llm-service")
 
@@ -47,18 +48,21 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def request_logging(request: Request, call_next):
-        request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+        request_id = request.headers.get("x-request-id") or uuid.uuid4().hex[:12]
         request.state.request_id = request_id
+        token = request_id_var.set(request_id)
         start = time.perf_counter()
-        response = await call_next(request)
-        duration_ms = round((time.perf_counter() - start) * 1000, 1)
-        logger.info(
-            "request_id=%s method=%s path=%s status=%d duration_ms=%.1f",
-            request_id, request.method, request.url.path,
-            response.status_code, duration_ms,
-        )
-        response.headers["X-Request-ID"] = request_id
-        return response
+        try:
+            response = await call_next(request)
+            duration_ms = round((time.perf_counter() - start) * 1000, 1)
+            logger.info(
+                "http_request",
+                extra={"status": response.status_code, "duration_ms": duration_ms},
+            )
+            response.headers["x-request-id"] = request_id
+            return response
+        finally:
+            request_id_var.reset(token)
 
     setup_exception_handlers(app)
 

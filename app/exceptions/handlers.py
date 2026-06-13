@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-import logging
-
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.core.exceptions import LLMError, LLMRateLimitError, LLMTimeoutError
-
-logger = logging.getLogger("llm-service")
 
 
 def setup_exception_handlers(app: FastAPI) -> None:

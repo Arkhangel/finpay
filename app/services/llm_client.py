@@ -56,11 +56,6 @@ class AsyncLLMClient:
     async def batch_chat(
         self, prompts: list[str], concurrency: int = 5, max_tokens: int = 256
     ) -> list[str | Exception]:
-        """Параллельные запросы. Ошибки оседают в позициях, не роняют батч.
-
-        Конкурентность ограничивается self._sem (создан в __init__).
-        Параметр concurrency используется при создании клиента: AsyncLLMClient(concurrency=N).
-        """
         return list(
             await asyncio.gather(
                 *(self.complete(p, max_tokens=max_tokens) for p in prompts),
@@ -69,9 +64,6 @@ class AsyncLLMClient:
         )
 
     async def stream_chat(self, prompt: str) -> AsyncIterator[str]:
-        """Async-генератор строковых дельт. Логирует total_tokens после стрима."""
-        first_token_t: float | None = None
-
         stream = await self._client.chat.completions.create(
             model=self._model,
             messages=[{"role": "user", "content": prompt}],
@@ -88,9 +80,6 @@ class AsyncLLMClient:
                 continue
             delta = chunk.choices[0].delta.content
             if delta:
-                if first_token_t is None:
-                    first_token_t = time.perf_counter()
-                    logger.debug("stream_chat: first token received")
                 yield delta
 
     async def close(self) -> None:

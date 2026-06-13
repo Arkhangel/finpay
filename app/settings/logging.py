@@ -1,21 +1,71 @@
+import contextvars
 import logging
 import logging.config
-import os
 
-import yaml
+import structlog
 
-from app.settings import settings
+request_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "request_id", default=None
+)
 
-logger = logging.getLogger(__name__)
+
+class RequestIdFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.request_id = request_id_var.get()
+        return True
 
 
-def config_logging() -> None:
-    logger_config_path = f".config/logging_{settings.environment}.yaml"
-    if not os.path.isfile(logger_config_path):
-        logger.warning("Logger config %s is not found", logger_config_path)
-        return
+_STDLIB_RECORD_ATTRS = frozenset({
+    "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
+    "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
+    "created", "msecs", "relativeCreated", "thread", "threadName",
+    "processName", "process", "message", "taskName",
+})
 
-    with open(logger_config_path, encoding="utf-8") as f:
-        config = yaml.safe_load(f.read())
 
-    logging.config.dictConfig(config)
+def _extract_extra(logger, method, event_dict):
+    """Разворачивает extra={} поля из stdlib-записей в плоский event_dict."""
+    record = event_dict.get("_record")
+    if record is not None:
+        for key, value in record.__dict__.items():
+            if key not in _STDLIB_RECORD_ATTRS and not key.startswith("_") and key not in event_dict:
+                event_dict[key] = value
+    return event_dict
+
+
+def setup_logging(level: str = "INFO") -> None:
+    log_level = getattr(logging, level.upper(), logging.INFO)
+
+    shared_processors = [
+        structlog.contextvars.merge_contextvars,
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.add_logger_name,
+        structlog.processors.TimeStamper(fmt="iso", utc=True),
+    ]
+
+    structlog.configure(
+        processors=shared_processors + [
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+        ],
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=True,
+    )
+
+    formatter = structlog.stdlib.ProcessorFormatter(
+        processor=structlog.processors.JSONRenderer(ensure_ascii=False),
+        foreign_pre_chain=shared_processors + [_extract_extra],
+    )
+
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+    handler.addFilter(RequestIdFilter())
+
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(log_level)
+
+
+# Алиас для обратной совместимости (app/llm/client.py)
+config_logging = setup_logging

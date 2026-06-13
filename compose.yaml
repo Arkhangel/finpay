@@ -10,9 +10,12 @@ services:
       OPENAI__MODEL: ${OPENAI__MODEL:-llama-3.1-8b-instant}
       REDIS__URL: redis://redis:6379/0
       HOST: 0.0.0.0
+      PHOENIX_COLLECTOR_ENDPOINT: http://phoenix:6006
     depends_on:
       redis:
         condition: service_healthy
+      phoenix:
+        condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 15s
@@ -22,6 +25,16 @@ services:
     volumes:
       - ./data:/app/data
     restart: unless-stopped
+
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    ports:
+      - "6006:6006"
+      - "4317:4317"
+    environment:
+      PHOENIX_WORKING_DIR: /data
+    volumes:
+      - phoenix-data:/data
 
   redis:
     image: redis:7.4-alpine
@@ -35,3 +48,4 @@ services:
 
 volumes:
   redis_data: {}
+  phoenix-data: {}

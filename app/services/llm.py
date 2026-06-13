@@ -8,13 +8,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
+import time
 from collections.abc import AsyncIterator
+
+import logging
 
 import openai
 from openai import AsyncOpenAI
 
 from app.core.exceptions import LLMAuthError, LLMRateLimitError, LLMTimeoutError
+from app.observability.pii import prompt_hash, redact_pii
 from app.schemas.chat import ChatDelta, ChatRequest, ChatResponse, Usage
 from app.settings import Settings
 
@@ -48,13 +51,16 @@ class LLMService:
                     resp = ChatResponse.model_validate_json(cached)
                     return resp.model_copy(update={"cached": True})
             except Exception:
-                logger.warning("Redis get failed, skipping cache")
+                logger.warning("redis_cache_get_failed")
 
         model = req.model or self._settings.openai.model
+        messages = [m.model_dump() for m in req.messages]
+        raw_prompt = json.dumps(messages, ensure_ascii=False)
+        start = time.perf_counter()
         try:
             response = await self._client.chat.completions.create(
                 model=model,
-                messages=[m.model_dump() for m in req.messages],
+                messages=messages,
                 temperature=req.temperature,
                 max_tokens=req.max_tokens,
             )
@@ -65,6 +71,20 @@ class LLMService:
         except openai.AuthenticationError as e:
             raise LLMAuthError(str(e)) from e
 
+        latency_ms = round((time.perf_counter() - start) * 1000, 1)
+        logger.info(
+            "llm_request_completed",
+            extra={
+                "model": model,
+                "input_tokens": response.usage.prompt_tokens if response.usage else None,
+                "output_tokens": response.usage.completion_tokens if response.usage else None,
+                "latency_ms": latency_ms,
+                "finish_reason": response.choices[0].finish_reason if response.choices else None,
+                "prompt_hash": prompt_hash(raw_prompt),
+                "prompt_preview": redact_pii(raw_prompt)[:120],
+            },
+        )
+
         result = ChatResponse.from_openai(response)
 
         if self._cache is not None:
@@ -73,7 +93,7 @@ class LLMService:
                     key, self._settings.redis.ttl, result.model_dump_json()
                 )
             except Exception:
-                logger.warning("Redis setex failed, skipping cache write")
+                logger.warning("redis_cache_set_failed")
 
         return result
 
