@@ -9,6 +9,7 @@ services:
       OPENAI__HOST: ${OPENAI__HOST:-https://api.groq.com/openai/v1}
       OPENAI__MODEL: ${OPENAI__MODEL:-llama-3.1-8b-instant}
       REDIS__URL: redis://redis:6379/0
+      HOST: 0.0.0.0
     depends_on:
       redis:
         condition: service_healthy
