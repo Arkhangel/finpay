@@ -100,32 +100,31 @@ class LLMService:
     async def stream(self, req: ChatRequest) -> AsyncIterator[ChatDelta]:
         model = req.model or self._settings.openai.model
         try:
-            openai_stream = await self._client.chat.completions.create(
+            async with await self._client.chat.completions.create(
                 model=model,
                 messages=[m.model_dump() for m in req.messages],
                 temperature=req.temperature,
                 max_tokens=req.max_tokens,
                 stream=True,
                 stream_options={"include_usage": True},
-            )
+            ) as stream:
+                async for chunk in stream:
+                    if not chunk.choices:
+                        if chunk.usage:
+                            yield ChatDelta(
+                                usage=Usage(
+                                    prompt_tokens=chunk.usage.prompt_tokens,
+                                    completion_tokens=chunk.usage.completion_tokens,
+                                    total_tokens=chunk.usage.total_tokens,
+                                )
+                            )
+                        continue
+                    delta = chunk.choices[0].delta.content
+                    if delta:
+                        yield ChatDelta(content=delta)
         except openai.RateLimitError as e:
             raise LLMRateLimitError(str(e)) from e
         except openai.APITimeoutError as e:
             raise LLMTimeoutError(str(e)) from e
         except openai.AuthenticationError as e:
             raise LLMAuthError(str(e)) from e
-
-        async for chunk in openai_stream:
-            if not chunk.choices:
-                if chunk.usage:
-                    yield ChatDelta(
-                        usage=Usage(
-                            prompt_tokens=chunk.usage.prompt_tokens,
-                            completion_tokens=chunk.usage.completion_tokens,
-                            total_tokens=chunk.usage.total_tokens,
-                        )
-                    )
-                continue
-            delta = chunk.choices[0].delta.content
-            if delta:
-                yield ChatDelta(content=delta)
