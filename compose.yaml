@@ -1,0 +1,34 @@
+services:
+  app:
+    build: .
+    image: finpay-service:v1
+    ports:
+      - "8000:8000"
+    environment:
+      OPENAI__API_KEY: ${OPENAI__API_KEY}
+      OPENAI__HOST: ${OPENAI__HOST:-https://api.groq.com/openai/v1}
+      OPENAI__MODEL: ${OPENAI__MODEL:-llama-3.1-8b-instant}
+      REDIS__URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  redis_data: {}

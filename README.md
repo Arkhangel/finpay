@@ -11,8 +11,46 @@
 
 ## Запуск
 
+### Локально
+
 ```bash
 uv run examples.run_tool_call
+```
+
+### Docker
+
+```bash
+sudo systemctl start docker
+```
+
+Запуск всего стека (FastAPI + Redis) одной командой:
+
+```bash
+export OPENAI__API_KEY=gsk_...
+docker compose up -d --build
+```
+
+`OPENAI__HOST` и `OPENAI__MODEL` имеют дефолты в `compose.yaml`. Переопределить:
+
+```bash
+export OPENAI__HOST=https://api.groq.com/openai/v1
+export OPENAI__MODEL=llama-3.1-8b-instant
+docker compose up -d --build
+```
+
+Проверка:
+
+```bash
+curl http://localhost:8000/health   # liveness — всегда 200
+curl http://localhost:8000/ready    # readiness — 200 если Redis жив, 503 если нет
+curl http://localhost:8000/docs     # Swagger UI
+```
+
+Остановка:
+
+```bash
+docker compose down          # остановить, сохранить данные Redis
+docker compose down -v       # остановить и удалить volume Redis
 ```
 
 ## Три тест-кейса
