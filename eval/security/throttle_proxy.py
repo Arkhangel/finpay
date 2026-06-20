@@ -44,23 +44,28 @@ async def proxy(request: Request, path: str) -> Response:
         if wait > 0:
             print(f"  [throttle] sleeping {wait:.1f}s …")
             await asyncio.sleep(wait)
-        _last_sent = time.monotonic()
 
-    body = await request.body()
-    headers = {
-        k: v
-        for k, v in request.headers.items()
-        if k.lower() not in ("host", "content-length", "transfer-encoding")
-    }
+        body = await request.body()
+        headers = {
+            k: v
+            for k, v in request.headers.items()
+            if k.lower() not in ("host", "content-length", "transfer-encoding")
+        }
 
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.request(
-            method=request.method,
-            url=f"{BACKEND}/{path}",
-            headers=headers,
-            content=body,
-            params=dict(request.query_params),
-        )
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.request(
+                method=request.method,
+                url=f"{BACKEND}/{path}",
+                headers=headers,
+                content=body,
+                params=dict(request.query_params),
+            )
+
+        # Only update the timer if the request actually reached the LLM (not blocked by security)
+        if resp.status_code != 400:
+            _last_sent = time.monotonic()
+        else:
+            print(f"  [throttle] 400 blocked — skipping delay")
 
     return Response(
         content=resp.content,
