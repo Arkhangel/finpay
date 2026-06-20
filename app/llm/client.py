@@ -12,7 +12,10 @@ config_logging()
 
 logger = logging.getLogger(__name__)
 
-client = OpenAI(api_key=settings.openai.api_key, base_url=settings.openai.host)
+client = OpenAI(
+    api_key=settings.openai.api_key or None,
+    base_url=settings.openai.host or None,
+)
 
 # Маршрутизация: имя tool → функция
 HANDLERS = {

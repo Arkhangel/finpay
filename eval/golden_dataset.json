@@ -1,0 +1,241 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "id": "faq_001",
+      "question": "Какая стандартная комиссия FinPay за транзакцию?",
+      "expected_answer": "Стандартная комиссия составляет 1.8% от суммы транзакции.",
+      "expected_keywords": ["1.8%", "комиссия", "транзакция"],
+      "category": "factual",
+      "difficulty": "easy",
+      "source": "synthetic"
+    },
+    {
+      "id": "faq_002",
+      "question": "Какие статусы транзакции существуют в FinPay?",
+      "expected_answer": "Статусы транзакции: pending (ожидание), processing (обработка), succeeded (успешно), failed (отклонён), refunded (возврат), partially_refunded (частичный возврат).",
+      "expected_keywords": ["pending", "succeeded", "failed", "refunded", "processing"],
+      "category": "factual",
+      "difficulty": "easy",
+      "source": "synthetic"
+    },
+    {
+      "id": "faq_003",
+      "question": "Какой максимальный размер одной транзакции?",
+      "expected_answer": "Максимальная сумма одной транзакции — 300 000 ₽. Суточный объём — до 1 000 000 ₽.",
+      "expected_keywords": ["300 000", "300000", "лимит", "транзакция"],
+      "category": "factual",
+      "difficulty": "easy",
+      "source": "synthetic"
+    },
+    {
+      "id": "faq_004",
+      "question": "Какие способы оплаты поддерживает FinPay?",
+      "expected_answer": "FinPay поддерживает: банковские карты Visa, Mastercard, МИР с обязательным 3-D Secure, оплату через СБП (QR-код и ссылка), электронные кошельки ЮMoney и QIWI.",
+      "expected_keywords": ["Visa", "Mastercard", "МИР", "СБП", "ЮMoney", "QIWI"],
+      "category": "factual",
+      "difficulty": "easy",
+      "source": "synthetic"
+    },
+    {
+      "id": "faq_005",
+      "question": "Какая комиссия при оплате через СБП?",
+      "expected_answer": "Комиссия СБП составляет 0.4% — установлена ЦБ РФ, в отличие от стандартных 1.8% по картам.",
+      "expected_keywords": ["0.4%", "СБП", "ЦБ РФ"],
+      "category": "factual",
+      "difficulty": "easy",
+      "source": "synthetic"
+    },
+    {
+      "id": "faq_006",
+      "question": "Когда применяется корпоративный тариф и какова его комиссия?",
+      "expected_answer": "Корпоративный тариф доступен при обороте от 500 000 ₽ в месяц. Комиссия от 1.2% — обсуждается индивидуально с менеджером.",
+      "expected_keywords": ["500 000", "корпоративный", "1.2%", "индивидуально"],
+      "category": "factual",
+      "difficulty": "medium",
+      "source": "synthetic"
+    },
+    {
+      "id": "faq_007",
+      "question": "Каков суточный лимит транзакций и можно ли его повысить?",
+      "expected_answer": "Суточный объём — до 1 000 000 ₽. Лимит можно повысить по запросу в поддержку.",
+      "expected_keywords": ["1 000 000", "суточный", "лимит", "повысить"],
+      "category": "factual",
+      "difficulty": "easy",
+      "source": "synthetic"
+    },
+    {
+      "id": "sup_001",
+      "question": "Что означает ошибка 429 от API FinPay и как её обработать?",
+      "expected_answer": "Ошибка 429 означает превышение лимита запросов (100 req/sec). Необходимо реализовать retry-логику с задержкой (exponential backoff).",
+      "expected_keywords": ["429", "rate limit", "100 req/sec", "retry", "задержка"],
+      "category": "support",
+      "difficulty": "medium",
+      "source": "support_ticket"
+    },
+    {
+      "id": "sup_002",
+      "question": "Сколько повторных попыток доставки вебхука делает FinPay и с какими интервалами?",
+      "expected_answer": "FinPay делает до 5 повторных попыток с интервалами 1, 5, 15, 60 и 240 минут при недоступности endpoint.",
+      "expected_keywords": ["5", "повторных", "1", "5", "15", "60", "240", "минут"],
+      "category": "support",
+      "difficulty": "hard",
+      "source": "synthetic"
+    },
+    {
+      "id": "sup_003",
+      "question": "Как проверить подлинность вебхука от FinPay?",
+      "expected_answer": "Вебхук содержит заголовок X-FinPay-Signature с подписью HMAC-SHA256. Нужно вычислить HMAC тела запроса своим webhook-секретом и сравнить с заголовком.",
+      "expected_keywords": ["HMAC-SHA256", "X-FinPay-Signature", "подпись", "верификация"],
+      "category": "support",
+      "difficulty": "hard",
+      "source": "phoenix_trace",
+      "must_not_contain": ["CVV", "PIN", "пароль", "секрет в открытом виде"]
+    },
+    {
+      "id": "sup_004",
+      "question": "Где взять тестовые карты для работы в тестовом режиме FinPay?",
+      "expected_answer": "Тестовые карты доступны в документации по адресу docs.finpay.ru/testing. Тестовые ключи имеют вид test_sk_*.",
+      "expected_keywords": ["docs.finpay.ru/testing", "test_sk_", "тестовые карты"],
+      "category": "support",
+      "difficulty": "easy",
+      "source": "support_ticket"
+    },
+    {
+      "id": "sup_005",
+      "question": "Что означает ошибка 401 при вызове API FinPay?",
+      "expected_answer": "Ошибка 401 означает неверный или просроченный API-ключ. Проверьте ключ в личном кабинете lk.finpay.ru.",
+      "expected_keywords": ["401", "API-ключ", "неверный", "просроченный", "lk.finpay.ru"],
+      "category": "support",
+      "difficulty": "easy",
+      "source": "synthetic"
+    },
+    {
+      "id": "sup_006",
+      "question": "Что делать, если транзакция завис в статусе processing более получаса?",
+      "expected_answer": "Статус processing может сохраняться до 30 минут в редких случаях. Если прошло больше 30 минут, обратитесь в поддержку api-support@finpay.ru или через личный кабинет.",
+      "expected_keywords": ["processing", "30 минут", "поддержку", "api-support@finpay.ru"],
+      "category": "support",
+      "difficulty": "medium",
+      "source": "support_ticket"
+    },
+    {
+      "id": "bil_001",
+      "question": "Сколько стоит дополнительный вывод средств сверх одного раза в сутки?",
+      "expected_answer": "Первый вывод в сутки бесплатный. Каждый дополнительный вывод стоит 0.1% от суммы.",
+      "expected_keywords": ["0.1%", "дополнительный", "вывод", "бесплатно"],
+      "category": "billing",
+      "difficulty": "medium",
+      "source": "synthetic"
+    },
+    {
+      "id": "bil_002",
+      "question": "В течение какого срока можно оформить возврат платежа?",
+      "expected_answer": "Возврат можно оформить в течение 30 дней с момента оплаты.",
+      "expected_keywords": ["30 дней", "возврат", "рефанд"],
+      "category": "billing",
+      "difficulty": "easy",
+      "source": "synthetic"
+    },
+    {
+      "id": "bil_003",
+      "question": "Сколько времени занимает зачисление возврата клиенту?",
+      "expected_answer": "Срок зачисления возврата клиенту — 3–10 рабочих дней, в зависимости от банка.",
+      "expected_keywords": ["3-10", "рабочих дней", "банка", "зачисление"],
+      "category": "billing",
+      "difficulty": "easy",
+      "source": "synthetic"
+    },
+    {
+      "id": "bil_004",
+      "question": "Как рассчитать итоговую сумму комиссии за месяц, если оборот составил 200 000 ₽ по картам и 100 000 ₽ через СБП?",
+      "expected_answer": "По картам: 200 000 × 1.8% = 3 600 ₽. По СБП: 100 000 × 0.4% = 400 ₽. Итого: 4 000 ₽.",
+      "expected_keywords": ["1.8%", "0.4%", "3 600", "400", "4 000"],
+      "category": "billing",
+      "difficulty": "hard",
+      "source": "synthetic"
+    },
+    {
+      "id": "bil_005",
+      "question": "Каков лимит транзакции в тестовом режиме FinPay?",
+      "expected_answer": "В тестовом режиме максимальная сумма транзакции — 10 000 ₽. Ключи тестового режима имеют вид test_sk_*.",
+      "expected_keywords": ["10 000", "тестовый режим", "test_sk_"],
+      "category": "billing",
+      "difficulty": "medium",
+      "source": "phoenix_trace"
+    },
+    {
+      "id": "cod_001",
+      "question": "Как создать возврат через API FinPay?",
+      "expected_answer": "Для возврата нужно отправить POST-запрос на /v1/refunds с параметрами payment_id (идентификатор платежа) и amount (сумма возврата).",
+      "expected_keywords": ["POST", "/v1/refunds", "payment_id", "amount"],
+      "category": "code_gen",
+      "difficulty": "medium",
+      "source": "synthetic"
+    },
+    {
+      "id": "cod_002",
+      "question": "Какие события передаются в вебхуках FinPay?",
+      "expected_answer": "FinPay отправляет вебхуки для событий: payment.succeeded, payment.failed, payment.pending, refund.created, refund.succeeded.",
+      "expected_keywords": ["payment.succeeded", "payment.failed", "refund.created", "refund.succeeded"],
+      "category": "code_gen",
+      "difficulty": "medium",
+      "source": "synthetic"
+    },
+    {
+      "id": "cod_003",
+      "question": "Как правильно реализовать retry-логику при получении ошибки 429 от FinPay API?",
+      "expected_answer": "При получении 429 нужно реализовать exponential backoff: первая задержка ~1 сек, затем удваивать. Максимум 3–5 попыток. Можно использовать библиотеки tenacity или backoff.",
+      "expected_keywords": ["429", "exponential backoff", "retry", "задержка", "попыток"],
+      "category": "code_gen",
+      "difficulty": "hard",
+      "source": "synthetic"
+    },
+    {
+      "id": "cod_004",
+      "question": "Где управлять API-ключами и настраивать вебхуки в FinPay?",
+      "expected_answer": "API-ключи, вебхуки и аналитика доступны в личном кабинете по адресу lk.finpay.ru в разделе Настройки.",
+      "expected_keywords": ["lk.finpay.ru", "личный кабинет", "Настройки", "API-ключи", "вебхуки"],
+      "category": "code_gen",
+      "difficulty": "easy",
+      "source": "synthetic"
+    },
+    {
+      "id": "cod_005",
+      "question": "Как проверить подпись вебхука на Python с использованием HMAC-SHA256?",
+      "expected_answer": "Используйте hmac.new(secret.encode(), request_body, hashlib.sha256).hexdigest() и сравните с заголовком X-FinPay-Signature. Сравнивайте через hmac.compare_digest для защиты от timing-атак.",
+      "expected_keywords": ["hmac", "sha256", "X-FinPay-Signature", "compare_digest", "Python"],
+      "category": "code_gen",
+      "difficulty": "hard",
+      "source": "synthetic",
+      "must_not_contain": ["CVV", "PIN", "пароль"]
+    },
+    {
+      "id": "faq_008",
+      "question": "Что значит статус failed у транзакции и какие могут быть причины?",
+      "expected_answer": "Статус failed означает, что платёж отклонён. Причина указана в поле failure_reason. Типичные причины: недостаточно средств, карта заблокирована, истёк срок действия карты, отказ банка-эмитента.",
+      "expected_keywords": ["failed", "failure_reason", "отклонён", "недостаточно средств", "карта"],
+      "category": "factual",
+      "difficulty": "medium",
+      "source": "support_ticket"
+    },
+    {
+      "id": "sup_007",
+      "question": "Как узнать, есть ли проблемы с платёжной системой FinPay прямо сейчас?",
+      "expected_answer": "Текущий статус компонентов FinPay можно проверить на странице status.finpay.ru. Там отображается состояние API, checkout, dashboard, платежей и выплат.",
+      "expected_keywords": ["status.finpay.ru", "статус", "компоненты", "API", "checkout"],
+      "category": "support",
+      "difficulty": "easy",
+      "source": "synthetic"
+    },
+    {
+      "id": "cod_006",
+      "question": "Как через API проверить статус конкретной транзакции TXN-1002?",
+      "expected_answer": "Для проверки статуса транзакции обратитесь к эндпоинту проверки статуса с идентификатором TXN-1002. Статус будет возвращён вместе с суммой, валютой и причиной отказа (если применимо).",
+      "expected_keywords": ["TXN-1002", "статус", "transaction_id", "failure_reason"],
+      "category": "code_gen",
+      "difficulty": "easy",
+      "source": "phoenix_trace"
+    }
+  ]
+}

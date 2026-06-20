@@ -8,6 +8,13 @@ class ModelInfo(BaseModel):
     input_price_per_1k: float
     output_price_per_1k: float
 
+    def calculate_cost(self, prompt_tokens: int, completion_tokens: int) -> float:
+        """Return total USD cost for a single API call based on token usage."""
+        return (
+            prompt_tokens / 1000 * self.input_price_per_1k
+            + completion_tokens / 1000 * self.output_price_per_1k
+        )
+
 
 AVAILABLE_MODELS: list[ModelInfo] = [
     ModelInfo(id="gpt-4o",      name="GPT-4o",      context_window=128000, input_price_per_1k=0.005,   output_price_per_1k=0.015),

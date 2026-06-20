@@ -2,14 +2,19 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from app.observability.pii import redact_pii
+
 
 class Message(BaseModel):
     role: str
-    content: str
+    content: str = Field(min_length=1, max_length=32000)
+
+    def __repr__(self) -> str:
+        return f"Message(role={self.role!r}, content={redact_pii(self.content)!r})"
 
 
 class ChatRequest(BaseModel):
-    messages: list[Message]
+    messages: list[Message] = Field(min_length=1)
     model: str | None = None
     temperature: float = Field(default=0.7, ge=0, le=2)
     max_tokens: int = Field(default=1024, ge=1, le=16000)
