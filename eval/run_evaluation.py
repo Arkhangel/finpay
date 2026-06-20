@@ -184,13 +184,22 @@ async def run_evaluation(
     print(f"  min_correctness : {aggregates['min_correctness']}", file=sys.stderr)
 
 
+def _default_out() -> str:
+    date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return f"eval/runs/{date}.json"
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Run LLM evaluation with G-Eval judge (reason-then-score)."
     )
     p.add_argument("--golden", required=True, help="Path to golden_dataset.json")
     p.add_argument("--judge", required=True, help="Judge model name (e.g. gpt-5.2)")
-    p.add_argument("--out", required=True, help="Output path for run results JSON")
+    p.add_argument(
+        "--out",
+        default=None,
+        help="Output path for run results JSON (default: eval/runs/<YYYY-MM-DD>.json)",
+    )
     p.add_argument(
         "--model",
         default=None,
@@ -201,7 +210,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = _build_parser().parse_args()
-    asyncio.run(run_evaluation(args.golden, args.judge, args.out, args.model))
+    out = args.out or _default_out()
+    asyncio.run(run_evaluation(args.golden, args.judge, out, args.model))
 
 
 if __name__ == "__main__":
