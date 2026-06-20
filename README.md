@@ -1,84 +1,237 @@
-# Payment Support — Function Calling
+# FinPay — AI-ассистент техподдержки
 
-Ассистент техподдержки платёжного процессинга с двумя инструментами.
+FastAPI-сервис на базе LLM для поддержки платёжного процессинга.
+Поддерживает function calling, кеширование ответов в Redis, observability через OpenTelemetry и security-слой с защитой от prompt injection.
 
-## Инструменты
+## Быстрый старт
 
-| Tool | Источник данных |
-|---|---|
-| `get_payment_system_status(component)` | Stripe Status API (публичный, без ключа) |
-| `check_transaction_status(transaction_id)` | Локальная SQLite с тестовыми данными |
+```bash
+# Установить зависимости
+uv sync --all-groups
+
+# Скопировать конфиг и вписать API-ключ
+cp .config/example.toml .config/local.toml
+# отредактировать .config/local.toml: openai.api_key, openai.host, openai.model
+
+# Запустить сервер
+ENVIRONMENT=local uv run main.py
+```
+
+## Окружения
+
+Конфиги хранятся в `.config/<env>.toml`. Окружение задаётся переменной `ENVIRONMENT`:
+
+| Значение | Файл конфига |
+|----------|-------------|
+| `local` | `.config/local.toml` |
+| `dev` | `.config/dev.toml` |
+| `test` | `.config/test.toml` |
+
+Любой параметр из TOML можно переопределить env-переменной. Вложенные поля разделяются `__`:
+
+```bash
+ENVIRONMENT=local \
+OPENAI__API_KEY=gsk_... \
+OPENAI__HOST=https://api.groq.com/openai/v1 \
+OPENAI__MODEL=llama-3.3-70b-versatile \
+uv run main.py
+```
+
+### Ключевые параметры конфига
+
+```toml
+[openai]
+api_key   = ""                              # ключ провайдера
+host      = "https://api.groq.com/openai/v1"
+model     = "llama-3.3-70b-versatile"
+
+[redis]
+url       = "redis://localhost:6379"
+ttl       = 3600                            # секунд, TTL кеша ответов
+
+security_enabled = true                     # false — отключить security-слой
+```
 
 ## Запуск
 
-### Локально
+### Локально (без Docker)
+
+Требуется запущенный Redis:
 
 ```bash
-uv run examples.run_tool_call
+redis-server --daemonize yes
+
+ENVIRONMENT=local uv run main.py
 ```
 
-### Docker
+### Docker Compose (рекомендуется)
 
-```bash
-sudo systemctl start docker
-```
-
-Запуск всего стека (FastAPI + Redis) одной командой:
+Поднимает FastAPI + Redis одной командой:
 
 ```bash
 export OPENAI__API_KEY=gsk_...
-docker compose up -d --build
-```
-
-`OPENAI__HOST` и `OPENAI__MODEL` имеют дефолты в `compose.yaml`. Переопределить:
-
-```bash
 export OPENAI__HOST=https://api.groq.com/openai/v1
-export OPENAI__MODEL=llama-3.1-8b-instant
+export OPENAI__MODEL=llama-3.3-70b-versatile
+
 docker compose up -d --build
-```
-
-Проверка:
-
-```bash
-curl http://localhost:8000/health   # liveness — всегда 200
-curl http://localhost:8000/ready    # readiness — 200 если Redis жив, 503 если нет
-curl http://localhost:8000/docs     # Swagger UI
 ```
 
 Остановка:
 
 ```bash
-docker compose down          # остановить, сохранить данные Redis
-docker compose down -v       # остановить и удалить volume Redis
+docker compose down       # сохранить данные Redis
+docker compose down -v    # удалить volume Redis
 ```
 
-## Три тест-кейса
+### Проверка
 
-### (а) Запрос, который точно требует tool
+```bash
+curl http://localhost:8000/health   # liveness  — 200
+curl http://localhost:8000/ready    # readiness — 200 если Redis жив, 503 если нет
+curl http://localhost:8000/docs     # Swagger UI
+```
 
-**Запрос:** `"Что случилось с транзакцией TXN-1002? Почему платёж не прошёл?"`
+## Инструменты (function calling)
 
-Модель вызвала `check_transaction_status` с аргументом `{"transaction_id": "TXN-1002"}`.
-Функция обратилась к SQLite и вернула статус `failed`, причину — `"Недостаточно средств"`.
-Финальный ответ содержал конкретную причину отказа и рекомендацию проверить баланс карты.
+| Tool | Описание |
+|------|----------|
+| `get_payment_system_status(component)` | Статус компонентов платёжной системы |
+| `check_transaction_status(transaction_id)` | Статус транзакции из локальной SQLite |
 
----
+## Тесты
 
-### (б) Запрос, который точно не требует tool
+```bash
+# Все unit-тесты (без вызовов LLM)
+ENVIRONMENT=test uv run pytest tests/ -m "not llm" -v
 
-**Запрос:** `"Как работает процесс возврата средств при отмене заказа?"`
+# Только security-тесты
+ENVIRONMENT=test uv run pytest tests/unit/test_security.py -v
 
-Модель НЕ вызвала ни один инструмент — ответила текстом напрямую.
-Объяснила общий процесс рефанда: инициация, срок зачисления, участие банка.
-Код не упал, ветка `if not message.tool_calls` отработала корректно.
+# С реальным LLM (требует API-ключ)
+ENVIRONMENT=local uv run pytest tests/ -m llm -v
+```
 
----
+## Оценка качества (eval)
 
-### (в) Пограничный случай
+### Прогон на golden dataset
 
-**Запрос:** `"У меня проблемы с платежами сегодня, всё ли нормально с системой?"`
+```bash
+ENVIRONMENT=local uv run python eval/run_evaluation.py \
+  --golden eval/golden_dataset.json \
+  --judge  gpt-4o-mini \
+  --out    eval/runs/$(date +%Y-%m-%d).json
+```
 
-Модель вызвала `get_payment_system_status` с аргументом `{"component": "payments"}`.
-Несмотря на размытую формулировку, модель интерпретировала вопрос как запрос о статусе сервиса.
-Получила реальные данные с внутренних данных и сообщила текущее состояние компонента.
+Результат сохраняется в `eval/runs/<YYYY-MM-DD>.json`.
+
+### Проверка порогов (CI)
+
+```bash
+# Читает последний файл из eval/runs/, завершается с exit 1 при нарушении
+ENVIRONMENT=test uv run python eval/check_thresholds.py
+```
+
+Пороги задаются в `eval/thresholds.yaml`:
+
+```yaml
+correctness_avg: 4.0   # средняя оценка правильности по всем вопросам
+min_correctness: 2.0   # минимально допустимая оценка для одного вопроса
+```
+
+## Security-тестирование (garak)
+
+Тестирование ведётся в два прогона: baseline (без защиты) и after (с защитой).
+Garak обращается к серверу через throttle-прокси, чтобы не превысить лимиты провайдера.
+
+### Baseline (security отключена)
+
+```bash
+# Терминал 1 — сервер без security-слоя
+ENVIRONMENT=local SECURITY_ENABLED=false uv run main.py
+
+# Терминал 2 — throttle-прокси (20 RPM, :8001 → :8000)
+ENVIRONMENT=local uv run python eval/security/throttle_proxy.py --rpm 20
+
+# Терминал 3 — garak
+ENVIRONMENT=local uv run garak \
+  --target_type rest \
+  -G eval/security/rest_config.json \
+  --probes promptinject.HijackHateHumans,encoding.InjectBase64,dan.Ablation_Dan_11_0 \
+  --parallel_requests 1 --parallel_attempts 1 \
+  --generations 1
+```
+
+### After (security включена)
+
+```bash
+# Терминал 1 — сервер с security-слоем (по умолчанию)
+ENVIRONMENT=local uv run main.py
+
+# Терминал 2 — throttle-прокси
+ENVIRONMENT=local uv run python eval/security/throttle_proxy.py --rpm 20
+
+# Терминал 3 — те же probe-ы
+ENVIRONMENT=local uv run garak \
+  --target_type rest \
+  -G eval/security/rest_config.json \
+  --probes promptinject.HijackHateHumans,encoding.InjectBase64,dan.Ablation_Dan_11_0 \
+  --parallel_requests 1 --parallel_attempts 1 \
+  --generations 1
+```
+
+### Отчёты garak
+
+Garak сохраняет результаты в `~/.local/share/garak/garak_runs/`.
+После каждого прогона скопировать в проект:
+
+```bash
+# После baseline
+cp ~/.local/share/garak/garak_runs/baseline.* \
+   docs/security/reports/baseline/
+
+# После after
+cp ~/.local/share/garak/garak_runs/after.* \
+   docs/security/reports/after/
+```
+
+Извлечь attack_success_rate по пробам:
+
+```bash
+cat ~/.local/share/garak/garak_runs/baseline.report.jsonl \
+  | jq 'select(.entry_type=="eval") | {probe: .probe, asr: (1 - (.passed / .total))}'
+```
+
+Шаблоны отчётов: `docs/security/garak_baseline_2026-06-20.md`, `docs/security/garak_after_2026-06-20.md`.
+
+## Структура проекта
+
+```
+app/
+  routers/          # FastAPI endpoints (/chat, /health, /models)
+  services/
+    llm.py          # оркестрация LLM + tool calls
+    security/       # input_validator, output_filter
+  llm/client.py     # синхронный OpenAI-клиент (module-level)
+  prompts/          # Jinja2-шаблоны системного промпта
+  tools/            # handlers и схемы для function calling
+  schemas/          # Pydantic-модели запросов и ответов
+  observability/    # structlog + OpenTelemetry + PII-маскирование
+  settings/         # pydantic-settings, TOML + env
+
+eval/
+  golden_dataset.json     # 26 вопросов, 4 категории
+  run_evaluation.py       # G-Eval judge CLI
+  check_thresholds.py     # CI-проверка порогов
+  thresholds.yaml
+  security/
+    rest_config.json      # конфиг garak REST target (:8001)
+    throttle_proxy.py     # rate-limiting прокси
+
+tests/
+  unit/             # 56 unit-тестов, без сетевых вызовов
+  conftest.py
+
+docs/
+  architecture.md
+  security/         # garak-отчёты baseline и after
+```

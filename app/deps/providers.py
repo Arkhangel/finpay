@@ -24,6 +24,10 @@ def get_cache(request: Request) -> aioredis.Redis | None:
     return request.app.state.cache
 
 
+def get_canary(request: Request) -> str:
+    return getattr(request.app.state, "canary", "")
+
+
 def get_llm_service(
     openai: Annotated[AsyncOpenAI, Depends(get_openai)],
     cache: Annotated[aioredis.Redis | None, Depends(get_cache)],
@@ -33,3 +37,4 @@ def get_llm_service(
 
 LLMServiceDep = Annotated[LLMService, Depends(get_llm_service)]
 CacheDep = Annotated[aioredis.Redis | None, Depends(get_cache)]
+CanaryDep = Annotated[str, Depends(get_canary)]

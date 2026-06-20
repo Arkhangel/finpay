@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 from contextlib import asynccontextmanager
 
 import redis.asyncio as aioredis
@@ -18,6 +19,10 @@ logger = logging.getLogger("llm-service")
 async def lifespan(app: FastAPI):
     setup_logging(level="INFO")
     setup_tracing()
+
+    # Canary token injected into every system prompt to detect leakage
+    app.state.canary = f"CANARY_{secrets.token_hex(4)}"
+    logger.info("canary_token_generated token=%s", app.state.canary)
 
     app.state.openai = AsyncOpenAI(
         api_key=settings.openai.api_key,

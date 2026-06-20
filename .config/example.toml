@@ -1,6 +1,13 @@
 project_name = "FinPay"
 cors_origins = ["http://localhost:3000"]
 
+host = "127.0.0.1"
+port = 8000
+workers = 1
+reload = true
+
+security_enabled = true
+
 [openai]
 api_key = ""
 host = "https://api.groq.com/openai/v1"
@@ -8,5 +15,5 @@ model = ""
 
 [redis]
 url = "redis://localhost:6379"
-password = "test"
+password = ""
 ttl = 3600

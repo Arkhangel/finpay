@@ -72,6 +72,7 @@ class LLMService:
             raise LLMAuthError(str(e)) from e
 
         latency_ms = round((time.perf_counter() - start) * 1000, 1)
+        raw_response = (response.choices[0].message.content or "") if response.choices else ""
         logger.info(
             "llm_request_completed",
             extra={
@@ -82,6 +83,8 @@ class LLMService:
                 "finish_reason": response.choices[0].finish_reason if response.choices else None,
                 "prompt_hash": prompt_hash(raw_prompt),
                 "prompt_preview": redact_pii(raw_prompt)[:120],
+                # PII masking on outgoing response content — not just inputs
+                "response_preview": redact_pii(raw_response)[:120],
             },
         )
 

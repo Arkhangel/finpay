@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     redis: RedisSettings = RedisSettings()
     cors_origins: list[str] = ["http://localhost:3000"]
 
+    security_enabled: bool = True
+
     host: str = "127.0.0.1"
     port: int = 8000
     workers: int = 1
