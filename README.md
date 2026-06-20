@@ -143,14 +143,45 @@ min_correctness: 2.0   # минимально допустимая оценка 
 Тестирование ведётся в два прогона: baseline (без защиты) и after (с защитой).
 Garak обращается к серверу через throttle-прокси, чтобы не превысить лимиты провайдера.
 
+### Throttle-прокси
+
+`eval/security/throttle_proxy.py` — тонкий reverse-proxy между garak и сервисом.
+Слушает на `:8001`, форвардит на `:8000`.
+
+**Зачем нужен:** garak шлёт ~255 запросов на три пробы. Free-tier Groq/xAI имеет лимит
+~6 000 TPM, а DAN-промпты весят ~900 токенов каждый — при неограниченной скорости
+сразу летят 429.
+
+**Как считать RPM под свой лимит:**
+```
+RPM = TPM_limit / avg_tokens_per_request
+# Groq free tier, llama-3.1-8b-instant: 6000 / 900 ≈ 5 RPM
+```
+
+**Параметры:**
+
+| Флаг | По умолчанию | Описание |
+|------|-------------|----------|
+| `--rpm` | 20 | Максимум запросов в минуту |
+| `--backend` | `http://localhost:8000` | Адрес реального сервиса |
+
+**Поведение при 400:** если security-слой заблокировал запрос до LLM — токены не
+потрачены, таймер сбрасывается и следующий запрос идёт без ожидания. After-прогон
+поэтому проходит быстрее baseline.
+
+**Подавить шум OTLP** (ускоряет каждый запрос на ~8 сек если коллектор не запущен):
+```bash
+OTEL_TRACES_EXPORTER=none ENVIRONMENT=local uv run main.py
+```
+
 ### Baseline (security отключена)
 
 ```bash
 # Терминал 1 — сервер без security-слоя
 ENVIRONMENT=local SECURITY_ENABLED=false uv run main.py
 
-# Терминал 2 — throttle-прокси (20 RPM, :8001 → :8000)
-ENVIRONMENT=local uv run python eval/security/throttle_proxy.py --rpm 20
+# Терминал 2 — throttle-прокси (:8001 → :8000), для Groq free tier --rpm 5
+ENVIRONMENT=local uv run python eval/security/throttle_proxy.py --rpm 5
 
 # Терминал 3 — garak
 ENVIRONMENT=local uv run garak \
