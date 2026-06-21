@@ -62,11 +62,12 @@ async def proxy(request: Request, path: str) -> Response:
             params=dict(request.query_params),
         )
 
-    # 400 = blocked by security layer, no LLM tokens spent — reset timer so next request goes immediately
-    if resp.status_code == 400:
+    # 400 = blocked before LLM (no tokens spent), 502 = blocked after LLM (tokens spent but response suppressed)
+    # In both cases reset timer — next request should not wait extra
+    if resp.status_code in (400, 502):
         async with _lock:
             _last_sent = 0.0
-        print(f"  [throttle] 400 blocked — timer reset")
+        print(f"  [throttle] {resp.status_code} blocked — timer reset")
 
     return Response(
         content=resp.content,
