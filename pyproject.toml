@@ -23,6 +23,7 @@ dependencies = [
     "asyncpg>=0.31.0",
     "alembic>=1.18.5",
     "tiktoken>=0.13.0",
+    "aiogram>=3.0",
 ]
 
 [dependency-groups]

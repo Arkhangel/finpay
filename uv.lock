@@ -38,6 +38,23 @@ wheels = [
 ]
 
 [[package]]
+name = "aiogram"
+version = "3.29.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiofiles" },
+    { name = "aiohttp" },
+    { name = "certifi" },
+    { name = "magic-filter" },
+    { name = "pydantic" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0c/e0/fe516e9c424858e44d190636563e0b9a8c0cc940032d43212d4def861f01/aiogram-3.29.0.tar.gz", hash = "sha256:17be0061174fd5b3aa494537f166c2f147b983ebef60d9ede2a3e8837af9c01e", size = 1895315, upload-time = "2026-06-14T17:25:24.998Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/02/1a/c56efc85cee9aca96de596253936590df163d2dfb0f8993e1db50f0c4a70/aiogram-3.29.0-py3-none-any.whl", hash = "sha256:f4b2c39d89c44e37998b4b4a8510d6914fc24f3d31125d6b3f6ea9589e67ec85", size = 803438, upload-time = "2026-06-14T17:25:23.064Z" },
+]
+
+[[package]]
 name = "aiohappyeyeballs"
 version = "2.6.2"
 source = { registry = "https://pypi.org/simple" }
@@ -893,6 +910,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "aiofiles" },
+    { name = "aiogram" },
     { name = "alembic" },
     { name = "arize-phoenix-otel" },
     { name = "asyncpg" },
@@ -926,6 +944,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiofiles", specifier = ">=25.1.0" },
+    { name = "aiogram", specifier = ">=3.0" },
     { name = "alembic", specifier = ">=1.18.5" },
     { name = "arize-phoenix-otel", specifier = ">=0.6" },
     { name = "asyncpg", specifier = ">=0.31.0" },
@@ -1970,6 +1989,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/3a/ae/6a5d8faaec3bc847ae1999e760f76c7238cefd99452e040e4aea5f723738/lorem-0.1.1.tar.gz", hash = "sha256:785f4109a241fc2891e59705e85d065f6e6d3ed6ad91750a8cb54d4f3e59d934", size = 3913, upload-time = "2016-06-18T21:15:54.335Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/90/7e/963834e2a400cefdf72af1e10a106c9e849cb4c149cc7b394cb1492effec/lorem-0.1.1-py3-none-any.whl", hash = "sha256:c9c2914b5a772022417c398bd74b7bbd712e73ff029ba82720855e458f13ae42", size = 4999, upload-time = "2016-06-18T21:15:50.562Z" },
+]
+
+[[package]]
+name = "magic-filter"
+version = "1.0.12"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e6/08/da7c2cc7398cc0376e8da599d6330a437c01d3eace2f2365f300e0f3f758/magic_filter-1.0.12.tar.gz", hash = "sha256:4751d0b579a5045d1dc250625c4c508c18c3def5ea6afaf3957cb4530d03f7f9", size = 11071, upload-time = "2023-10-01T12:33:19.006Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cc/75/f620449f0056eff0ec7c1b1e088f71068eb4e47a46eb54f6c065c6ad7675/magic_filter-1.0.12-py3-none-any.whl", hash = "sha256:e5929e544f310c2b1f154318db8c5cdf544dd658efa998172acd2e4ba0f6c6a6", size = 11335, upload-time = "2023-10-01T12:33:17.711Z" },
 ]
 
 [[package]]

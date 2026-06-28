@@ -18,3 +18,4 @@ wheels/
 /.coverage
 /data/transactions.db
 /var/
+.env

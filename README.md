@@ -49,7 +49,27 @@ model     = "llama-3.3-70b-versatile"
 url       = "redis://localhost:6379"
 ttl       = 3600                            # секунд, TTL кеша ответов
 
+[chat]
+repository       = "json"                   # "json" | "postgres"
+storage_dir      = "./var"                  # папка для JSON-хранилища
+context_strategy = "sliding"               # стратегия контекста
+context_window   = 10                       # N последних сообщений
+database_url     = "postgresql+asyncpg://postgres:postgres@localhost:5432/finpay"
+
+[bot]
+token       = ""                            # токен от @BotFather
+backend_url = "http://localhost:8000"       # адрес REST API
+
 security_enabled = true                     # false — отключить security-слой
+```
+
+## Режимы запуска
+
+Сервис запускается через единую точку входа `main.py`. Режим передаётся аргументом:
+
+```bash
+uv run main.py rest   # HTTP API (по умолчанию, можно без аргумента)
+uv run main.py bot    # Telegram-бот
 ```
 
 ## Запуск
@@ -61,12 +81,12 @@ security_enabled = true                     # false — отключить secur
 ```bash
 redis-server --daemonize yes
 
-ENVIRONMENT=local uv run main.py
+ENVIRONMENT=local uv run main.py rest
 ```
 
 ### Docker Compose (рекомендуется)
 
-Поднимает FastAPI + Redis одной командой:
+Поднимает FastAPI + Redis + PostgreSQL одной командой:
 
 ```bash
 export OPENAI__API_KEY=gsk_...
@@ -79,8 +99,8 @@ docker compose up -d --build
 Остановка:
 
 ```bash
-docker compose down       # сохранить данные Redis
-docker compose down -v    # удалить volume Redis
+docker compose down       # сохранить данные
+docker compose down -v    # удалить volumes Redis и Postgres
 ```
 
 ### Проверка
@@ -89,6 +109,59 @@ docker compose down -v    # удалить volume Redis
 curl http://localhost:8000/health   # liveness  — 200
 curl http://localhost:8000/ready    # readiness — 200 если Redis жив, 503 если нет
 curl http://localhost:8000/docs     # Swagger UI
+```
+
+## Чат-модуль (stateful история)
+
+Модуль `app/chat/` реализует серверную историю диалогов с двумя бэкендами хранилища.
+
+### Переключение хранилища
+
+В `.config/local.toml`:
+
+```toml
+[chat]
+repository = "json"      # файловое JSONL-хранилище (по умолчанию)
+# repository = "postgres"  # PostgreSQL (нужны Docker и миграция)
+```
+
+При первом использовании Postgres — применить миграцию:
+
+```bash
+ENVIRONMENT=local uv run alembic upgrade head
+```
+
+### Chat API
+
+| Метод | Путь | Описание |
+|-------|------|----------|
+| `POST` | `/chats` | Создать чат |
+| `GET` | `/chats/{id}` | Метаданные чата |
+| `POST` | `/chats/{id}/messages` | Отправить сообщение → SSE-стрим |
+| `GET` | `/chats/{id}/messages` | История сообщений |
+| `DELETE` | `/chats/{id}/messages` | Мягкое удаление истории |
+
+Подробнее: [`docs/chat.md`](docs/chat.md)
+
+## Telegram-бот
+
+Тонкий клиент к Chat API. Сценарий: `/ask` → выбор темы → вопрос → SSE-ответ в чат.
+
+### Запуск бота
+
+```bash
+# Прописать токен в .config/local.toml:
+# [bot]
+# token = "123456:ABC-..."
+# backend_url = "http://localhost:8000"
+
+ENVIRONMENT=local uv run main.py bot
+```
+
+REST API должен быть запущен отдельно:
+
+```bash
+ENVIRONMENT=local uv run main.py rest
 ```
 
 ## Инструменты (function calling)
@@ -101,8 +174,14 @@ curl http://localhost:8000/docs     # Swagger UI
 ## Тесты
 
 ```bash
-# Все unit-тесты (без вызовов LLM)
+# Все тесты (без вызовов LLM и без Docker)
 ENVIRONMENT=test uv run pytest tests/ -m "not llm" -v
+
+# Только chat-модуль (Postgres-тесты пропускаются без Docker)
+ENVIRONMENT=test uv run pytest tests/chat/ -v
+
+# Только бот
+ENVIRONMENT=test uv run pytest tests/bot/ -v
 
 # Только security-тесты
 ENVIRONMENT=test uv run pytest tests/unit/test_security.py -v
@@ -110,6 +189,8 @@ ENVIRONMENT=test uv run pytest tests/unit/test_security.py -v
 # С реальным LLM (требует API-ключ)
 ENVIRONMENT=local uv run pytest tests/ -m llm -v
 ```
+
+Postgres-тесты в `tests/chat/` автоматически пропускаются (`s`) если Docker недоступен.
 
 ## Оценка качества (eval)
 
@@ -238,16 +319,45 @@ cat ~/.local/share/garak/garak_runs/baseline.report.jsonl \
 
 ```
 app/
+  chat/             # M4Б1: stateful история диалогов
+    domain.py         # Pydantic-модели (Chat, ChatMessage)
+    repository.py     # Protocol-контракт хранилища
+    repositories/
+      json_repo.py    # JSONL-файловое хранилище
+      pg_repo.py      # PostgreSQL (async SQLAlchemy 2.x)
+      pg_models.py    # ORM-модели + миграция
+    context.py        # tiktoken, sliding window
+    service.py        # ChatService + SSE-генератор
+    routes.py         # /chats endpoints
+    deps.py           # FastAPI Depends
+  bot/              # M4Б2: Telegram-бот
+    handlers/
+      fsm.py          # /ask FSM-сценарий (aiogram 3)
+    keyboards/
+      inline.py       # клавиатура выбора темы
+    services/
+      backend_client.py  # httpx-клиент + SSE-парсинг
+    states.py         # AskFlow StatesGroup
   routers/          # FastAPI endpoints (/chat, /health, /models)
   services/
     llm.py          # оркестрация LLM + tool calls
     security/       # input_validator, output_filter
-  llm/client.py     # синхронный OpenAI-клиент (module-level)
+  llm/client.py     # AsyncOpenAI-клиент
   prompts/          # Jinja2-шаблоны системного промпта
   tools/            # handlers и схемы для function calling
   schemas/          # Pydantic-модели запросов и ответов
   observability/    # structlog + OpenTelemetry + PII-маскирование
   settings/         # pydantic-settings, TOML + env
+    chat.py           # ChatSettings
+    bot.py            # BotSettings
+
+modes/
+  rest.py           # uvicorn-сервер
+  bot.py            # aiogram polling
+
+alembic/
+  versions/
+    0001_chat_tables.py   # таблицы chats + chat_messages
 
 eval/
   golden_dataset.json     # 26 вопросов, 4 категории
@@ -259,10 +369,13 @@ eval/
     throttle_proxy.py     # rate-limiting прокси
 
 tests/
-  unit/             # 56 unit-тестов, без сетевых вызовов
+  unit/             # legacy unit-тесты
+  chat/             # тесты репозиториев, сервиса, маршрутов
+  bot/              # тесты FSM и BackendClient
   conftest.py
 
 docs/
+  chat.md           # архитектура чат-модуля
   architecture.md
   security/         # garak-отчёты baseline и after
 ```

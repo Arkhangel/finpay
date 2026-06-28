@@ -18,6 +18,11 @@ url = "redis://localhost:6379"
 password = ""
 ttl = 3600
 
+[bot]
+token = ""                        # Telegram bot token from @BotFather
+backend_url = "http://localhost:8000"
+admin_ids = []
+
 [chat]
 repository = "json"           # "json" | "postgres"
 storage_dir = "./var"
