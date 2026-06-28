@@ -17,3 +17,10 @@ model = ""
 url = "redis://localhost:6379"
 password = ""
 ttl = 3600
+
+[chat]
+repository = "json"           # "json" | "postgres"
+storage_dir = "./var"
+context_strategy = "sliding"  # "sliding" | "hybrid"
+context_window = 10
+database_url = "postgresql+asyncpg://postgres:postgres@localhost:5432/finpay"

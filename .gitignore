@@ -17,3 +17,4 @@ wheels/
 /.config/logging_local.yaml
 /.coverage
 /data/transactions.db
+/var/

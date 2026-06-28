@@ -18,6 +18,11 @@ dependencies = [
     "structlog>=24.0",
     "arize-phoenix-otel>=0.6",
     "openinference-instrumentation-openai>=0.1",
+    "aiofiles>=25.1.0",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.31.0",
+    "alembic>=1.18.5",
+    "tiktoken>=0.13.0",
 ]
 
 [dependency-groups]
@@ -26,6 +31,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pytest-mock>=3.14",
+    "testcontainers[postgresql]>=4.14.2",
 ]
 
 [tool.pytest.ini_options]

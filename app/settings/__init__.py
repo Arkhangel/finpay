@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from pydantic_settings import SettingsConfigDict, BaseSettings, PydanticBaseSettingsSource, TomlConfigSettingsSource, \
     SettingsError
 
+from app.settings.chat import ChatSettings
 from app.settings.openai import OpenAISettings
 from app.settings.redis import RedisSettings
 
@@ -19,6 +20,7 @@ class Settings(BaseSettings):
 
     openai: OpenAISettings = OpenAISettings()
     redis: RedisSettings = RedisSettings()
+    chat: ChatSettings = ChatSettings()
     cors_origins: list[str] = ["http://localhost:3000"]
 
     security_enabled: bool = True

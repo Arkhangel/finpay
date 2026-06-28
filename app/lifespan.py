@@ -43,8 +43,20 @@ async def lifespan(app: FastAPI):
         logger.warning("Redis unavailable — cache disabled")
         app.state.cache = None
 
+    if settings.chat.repository == "postgres":
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        pg_engine = create_async_engine(settings.chat.database_url, echo=False)
+        app.state.pg_engine = pg_engine
+        app.state.pg_session_factory = async_sessionmaker(pg_engine, expire_on_commit=False)
+        logger.info("Postgres engine created: %s", settings.chat.database_url)
+    else:
+        app.state.pg_engine = None
+        app.state.pg_session_factory = None
+
     yield
 
     await app.state.openai.close()
     if app.state.cache:
         await app.state.cache.aclose()
+    if app.state.pg_engine:
+        await app.state.pg_engine.dispose()

@@ -9,10 +9,13 @@ services:
       OPENAI__HOST: ${OPENAI__HOST:-https://api.groq.com/openai/v1}
       OPENAI__MODEL: ${OPENAI__MODEL:-llama-3.1-8b-instant}
       REDIS__URL: redis://redis:6379/0
+      CHAT__DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/finpay
       HOST: 0.0.0.0
       PHOENIX_COLLECTOR_ENDPOINT: http://phoenix:4317
     depends_on:
       redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
       phoenix:
         condition: service_started
@@ -46,6 +49,23 @@ services:
       timeout: 3s
       retries: 3
 
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: finpay
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    ports:
+      - "5432:5432"
+
 volumes:
   redis_data: {}
   phoenix-data: {}
+  pg_data: {}
