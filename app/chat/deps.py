@@ -8,11 +8,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chat.repository import ChatRepository
 from app.chat.service import ChatService
+from app.moderation import ModerationService
 from app.settings import settings
 
 
 def get_openai_client(request: Request) -> AsyncOpenAI:
     return request.app.state.openai
+
+
+def get_moderation_service(
+    llm: Annotated[AsyncOpenAI, Depends(get_openai_client)],
+) -> ModerationService | None:
+    if not settings.moderation.enabled:
+        return None
+    return ModerationService(
+        keywords_path=settings.moderation.keywords_path,
+        use_openai_api=settings.moderation.use_openai_api,
+        openai_client=llm,
+        category_thresholds=settings.moderation.category_thresholds,
+    )
 
 
 async def get_pg_session(request: Request) -> AsyncGenerator[AsyncSession, None]:
@@ -44,9 +58,11 @@ def get_repository(
 def get_chat_service(
     repo: Annotated[ChatRepository, Depends(get_repository)],
     llm: Annotated[AsyncOpenAI, Depends(get_openai_client)],
+    moderation: Annotated[ModerationService | None, Depends(get_moderation_service)],
 ) -> ChatService:
-    return ChatService(repository=repo, llm_client=llm)
+    return ChatService(repository=repo, llm_client=llm, moderation=moderation)
 
 
 ChatServiceDep = Annotated[ChatService, Depends(get_chat_service)]
+ChatRepositoryDep = Annotated[ChatRepository, Depends(get_repository)]
 OpenAIClientDep = Annotated[AsyncOpenAI, Depends(get_openai_client)]

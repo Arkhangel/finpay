@@ -10,6 +10,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from app.settings import settings
 from app.bot.handlers import build_router
 from app.bot.services.backend_client import BackendClient
+from app.bot.services.broadcast import run_broadcast_worker
 from app.bot.web import build_api
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,11 @@ async def _run() -> None:
         settings.bot.bot_api_port,
     )
     try:
-        await asyncio.gather(dp.start_polling(bot), server.serve())
+        await asyncio.gather(
+            dp.start_polling(bot),
+            server.serve(),
+            run_broadcast_worker(bot, backend),
+        )
     finally:
         await backend.close()
         await bot.session.close()

@@ -7,6 +7,7 @@ workers = 1
 reload = true
 
 security_enabled = true
+admin_token = ""                  # секрет для /chats/admin/* (заголовок X-Admin-Token), задавать через ADMIN_TOKEN
 
 [openai]
 api_key = ""
@@ -22,7 +23,7 @@ ttl = 3600
 [bot]
 token = ""                        # Telegram bot token from @BotFather
 backend_url = "http://localhost:8000"
-admin_ids = []
+admin_ids = []                            # Telegram user_id с доступом к /stats, /users, /broadcast
 bot_url = "http://localhost:9000"        # backend -> bot: базовый URL для POST /notify
 internal_token = ""                      # общий секрет для /notify, задавать через BOT__INTERNAL_TOKEN, в репозиторий не коммитить
 bot_api_port = 9000                       # порт, на котором бот поднимает свой внутренний FastAPI (/notify)
@@ -33,3 +34,14 @@ storage_dir = "./var"
 context_strategy = "sliding"  # "sliding" | "hybrid"
 context_window = 10
 database_url = "postgresql+asyncpg://postgres:postgres@localhost:5432/finpay"
+
+[moderation]
+enabled = true                                          # false — полностью отключить модерацию
+use_openai_api = false                                  # true — включить второй слой (omni-moderation-latest)
+keywords_path = "app/moderation/moderation_keywords.yaml"
+
+# Кастомные пороги score (0..1) по категориям omni-moderation; категории без
+# явного порога используют дефолт 0.5 (см. app/moderation/service.py).
+# [moderation.category_thresholds]
+# violence = 0.3
+# self_harm = 0.2

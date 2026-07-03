@@ -4,10 +4,16 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chat.domain import Chat, ChatMessage
-from app.chat.repositories.pg_models import ChatMessageRow, ChatRow
+from app.chat.repositories.pg_models import (
+    ChatMessageRow,
+    ChatRow,
+    MessageFeedbackRow,
+    ModerationIncidentRow,
+)
 
 
 class PostgresChatRepository:
@@ -53,6 +59,7 @@ class PostgresChatRepository:
             content=message.content,
             tokens=message.tokens,
             media_refs=message.media_refs,
+            latency_ms=message.latency_ms,
             created_at=message.created_at,
         )
         self._session.add(row)
@@ -83,5 +90,27 @@ class PostgresChatRepository:
                 ChatMessageRow.deleted_at.is_(None),
             )
             .values(deleted_at=now)
+        )
+        await self._session.commit()
+
+    async def save_feedback(
+        self, message_id: UUID, owner_external_id: str, value: str
+    ) -> bool:
+        stmt = (
+            pg_insert(MessageFeedbackRow)
+            .values(message_id=message_id, owner_external_id=owner_external_id, value=value)
+            .on_conflict_do_nothing(constraint="uq_message_feedback_owner_message")
+        )
+        result = await self._session.execute(stmt)
+        await self._session.commit()
+        return result.rowcount > 0
+
+    async def record_moderation_incident(
+        self, chat_id: UUID, direction: str, blocked_by: str, categories: list[str]
+    ) -> None:
+        self._session.add(
+            ModerationIncidentRow(
+                chat_id=chat_id, direction=direction, blocked_by=blocked_by, categories=categories
+            )
         )
         await self._session.commit()

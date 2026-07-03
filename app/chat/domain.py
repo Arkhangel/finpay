@@ -13,6 +13,7 @@ class ChatMessage(BaseModel):
     role: Literal["user", "assistant", "system"]
     content: str
     tokens: int | None = None
+    latency_ms: int | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     # {mime, size, filename, part} — part восстанавливается в следующих LLM-вызовах.
     media_refs: dict[str, Any] | None = None

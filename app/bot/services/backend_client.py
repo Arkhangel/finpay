@@ -8,6 +8,8 @@ from uuid import UUID
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from app.settings import settings
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT = httpx.Timeout(connect=3.0, read=60.0, write=10.0, pool=5.0)
@@ -48,7 +50,9 @@ class BackendClient:
         content: str,
         media: bytes | None = None,
         mime: str | None = None,
+        result: dict | None = None,
     ) -> AsyncIterator[str]:
+        """`result`, if given, is filled with {"message_id": <UUID | None>} once the stream ends."""
         # Без ретрая: частично отданный стрим нельзя повторить, не задвоив LLM-вызов.
         files = {"media": ("file.bin", media, mime)} if media else None
         data = {"content": content}
@@ -67,6 +71,9 @@ class BackendClient:
                 if payload["type"] == "token":
                     yield payload["delta"]
                 elif payload["type"] == "done":
+                    if result is not None:
+                        message_id = payload.get("message_id")
+                        result["message_id"] = UUID(message_id) if message_id else None
                     return
 
     @_retry_on_connect_error
@@ -74,6 +81,59 @@ class BackendClient:
         resp = await self._client.delete(f"/chats/{chat_id}/messages")
         resp.raise_for_status()
         logger.info("cleared_messages chat_id=%s", chat_id)
+
+    @_retry_on_connect_error
+    async def submit_feedback(self, chat_id: UUID, message_id: UUID, value: str) -> None:
+        resp = await self._client.post(
+            f"/chats/{chat_id}/messages/{message_id}/feedback", json={"value": value}
+        )
+        resp.raise_for_status()
+
+    # ── admin ────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _admin_headers() -> dict[str, str]:
+        return {"X-Admin-Token": settings.admin_token.get_secret_value()}
+
+    @_retry_on_connect_error
+    async def get_admin_stats(self) -> dict:
+        resp = await self._client.get("/chats/admin/stats", headers=self._admin_headers())
+        resp.raise_for_status()
+        return resp.json()
+
+    @_retry_on_connect_error
+    async def get_admin_users(self, limit: int = 50) -> list[dict]:
+        resp = await self._client.get(
+            "/chats/admin/users", params={"limit": limit}, headers=self._admin_headers()
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def post_admin_broadcast(self, message: str, interface_filter: str = "telegram") -> dict:
+        # Без ретрая: повтор POST продублировал бы рассылку.
+        resp = await self._client.post(
+            "/chats/admin/broadcast",
+            json={"message": message, "interface_filter": interface_filter},
+            headers=self._admin_headers(),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    @_retry_on_connect_error
+    async def get_pending_broadcasts(self, limit: int = 20) -> list[dict]:
+        resp = await self._client.get(
+            "/chats/admin/broadcast/pending", params={"limit": limit}, headers=self._admin_headers()
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def ack_broadcast(self, broadcast_id: str, status: str) -> None:
+        resp = await self._client.post(
+            f"/chats/admin/broadcast/{broadcast_id}/ack",
+            json={"status": status},
+            headers=self._admin_headers(),
+        )
+        resp.raise_for_status()
 
     async def close(self) -> None:
         await self._client.aclose()

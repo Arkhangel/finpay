@@ -2,6 +2,7 @@ services:
   app:
     build: .
     image: finpay-service:v1
+    command: ["sh", "-c", "alembic upgrade head && python main.py rest"]
     ports:
       - "8000:8000"
     environment:
@@ -9,7 +10,11 @@ services:
       OPENAI__HOST: ${OPENAI__HOST:-https://api.groq.com/openai/v1}
       OPENAI__MODEL: ${OPENAI__MODEL:-llama-3.1-8b-instant}
       REDIS__URL: redis://redis:6379/0
+      CHAT__REPOSITORY: postgres
       CHAT__DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/finpay
+      ADMIN_TOKEN: ${ADMIN_TOKEN}
+      BOT__BOT_URL: http://bot:9000
+      BOT__INTERNAL_TOKEN: ${BOT__INTERNAL_TOKEN}
       HOST: 0.0.0.0
       PHOENIX_COLLECTOR_ENDPOINT: http://phoenix:4317
     depends_on:
@@ -24,7 +29,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 15s
+      start_period: 25s
     volumes:
       - ./data:/app/data
     restart: unless-stopped
@@ -41,6 +46,7 @@ services:
       BOT__BOT_URL: http://bot:9000
       BOT__INTERNAL_TOKEN: ${BOT__INTERNAL_TOKEN}
       BOT__BOT_API_PORT: 9000
+      ADMIN_TOKEN: ${ADMIN_TOKEN}
       OPENAI__API_KEY: ${OPENAI__API_KEY}
       OPENAI__HOST: ${OPENAI__HOST:-https://api.groq.com/openai/v1}
       OPENAI__MODEL: ${OPENAI__MODEL:-llama-3.1-8b-instant}

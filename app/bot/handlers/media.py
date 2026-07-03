@@ -9,6 +9,7 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
+from app.bot.keyboards.feedback import feedback_kb
 from app.bot.services.backend_client import BackendClient
 from app.bot.services.streaming import friendly_error, stream_to_chat
 
@@ -50,9 +51,12 @@ async def _send_media(
     try:
         chat_id = await _get_or_init_chat(message, state, backend)
         caption = message.caption or ""
-        await stream_to_chat(
-            message, backend.send_message(chat_id, caption, media=media_bytes, mime=mime)
+        result: dict = {}
+        sent = await stream_to_chat(
+            message, backend.send_message(chat_id, caption, media=media_bytes, mime=mime, result=result)
         )
+        if result.get("message_id"):
+            await sent.edit_reply_markup(reply_markup=feedback_kb(result["message_id"]))
     except (httpx.ConnectError, httpx.ReadTimeout, httpx.HTTPStatusError) as exc:
         await message.answer(friendly_error(exc))
     except Exception:

@@ -62,8 +62,14 @@ backend_url    = "http://localhost:8000"       # адрес REST API
 bot_url        = "http://localhost:9000"       # backend -> bot: базовый URL для /notify
 internal_token = ""                            # секрет для /notify (BOT__INTERNAL_TOKEN)
 bot_api_port   = 9000                          # порт внутреннего API бота
+admin_ids      = []                            # Telegram user_id с доступом к /stats, /users, /broadcast
+
+[moderation]
+enabled        = true                          # false — отключить модерацию целиком
+use_openai_api = false                         # true — включить omni-moderation-latest
 
 security_enabled = true                     # false — отключить security-слой
+admin_token      = ""                       # секрет для /chats/admin/* (ADMIN_TOKEN)
 ```
 
 ## Режимы запуска
@@ -89,15 +95,25 @@ ENVIRONMENT=local uv run main.py rest
 
 ### Docker Compose (рекомендуется)
 
-Поднимает FastAPI + Redis + PostgreSQL одной командой:
+Поднимает FastAPI + Telegram-бот + Redis + PostgreSQL одной командой (backend
+использует Postgres по умолчанию, миграции применяются автоматически при
+старте `app`):
 
 ```bash
 export OPENAI__API_KEY=gsk_...
 export OPENAI__HOST=https://api.groq.com/openai/v1
 export OPENAI__MODEL=llama-3.3-70b-versatile
 
+# Секреты — генерируются локально, в репозиторий не коммитятся
+export BOT__TOKEN=123456:ABC-...              # токен от @BotFather
+export BOT__INTERNAL_TOKEN=$(openssl rand -hex 16)   # backend -> bot /notify
+export ADMIN_TOKEN=$(openssl rand -hex 16)           # доступ к /chats/admin/*
+
 docker compose up -d --build
 ```
+
+`pg_data` — именованный volume, данные Postgres переживают `docker compose down`
+(без флага `-v`).
 
 Остановка:
 
@@ -176,6 +192,62 @@ REST API должен быть запущен отдельно:
 ```bash
 ENVIRONMENT=local uv run main.py rest
 ```
+
+## Production-обвязка (Б4.4)
+
+### Модерация (`app/moderation/`)
+
+`ModerationService.check_input` / `check_output` — два слоя:
+
+1. keyword/regex по `app/moderation/moderation_keywords.yaml` (дёшево, включён всегда);
+2. опционально OpenAI Moderation API (`omni-moderation-latest`) — включается
+   флагом `[moderation] use_openai_api = true`.
+
+Вход проверяется до старта SSE-стрима: заблокированный запрос — `403` с
+`detail.code == "moderation_blocked"`. Выход проверяется на собранном полном
+ответе; если он нарушает правила, в историю пишется заглушка "Не могу показать
+ответ — он мог нарушить правила" (токены, уже показанные во время стрима,
+задним числом скрыть нельзя — это заранее известное ограничение стриминга).
+Инциденты логируются (хеш + маскированный текст, без сырого текста) и пишутся
+в таблицу `moderation_incidents` (только Postgres).
+
+### Admin API (`app/admin/`, только Postgres)
+
+Префикс `/chats/admin`, авторизация — заголовок `X-Admin-Token` (сверяется с
+`ADMIN_TOKEN` из env).
+
+| Метод | Путь | Описание |
+|-------|------|----------|
+| `GET` | `/chats/admin/stats` | сообщения/DAU/латентность/block-rate за 24ч |
+| `GET` | `/chats/admin/users?limit=50` | последние пользователи |
+| `POST` | `/chats/admin/broadcast` | поставить рассылку в очередь |
+| `GET` | `/chats/admin/broadcast/pending` | internal: бот забирает рассылки |
+| `POST` | `/chats/admin/broadcast/{id}/ack` | internal: бот отчитывается о статусе |
+
+Без Postgres (`CHAT__REPOSITORY=json`) эндпоинты отвечают `503`.
+
+### Admin-команды бота
+
+Доступны только `message.from_user.id` из `[bot] admin_ids` (фильтр `IsAdmin`
+на уровне роутера — не внутри хендлеров):
+
+```
+/stats               — статистика за 24ч
+/users               — первые 10 последних пользователей
+/broadcast <текст>    — поставить рассылку в очередь (interface=telegram)
+```
+
+Бот сам вытягивает рассылки из `broadcast_queue` фоновым воркером
+(`app/bot/services/broadcast.py`, опрос раз в 10 сек) и шлёт их через свою
+сессию — backend не хранит токен бота и не обращается к Telegram напрямую.
+
+### Фидбек 👍/👎
+
+После каждого ответа ассистента бот прикрепляет инлайн-клавиатуру
+(`fb:<up|down>:<message_id>`). Голос сохраняется в `message_feedback`
+(`UNIQUE (owner_external_id, message_id)` — повторный голос того же
+пользователя по тому же сообщению просто игнорируется), после чего бот
+убирает клавиатуру через `edit_reply_markup(reply_markup=None)`.
 
 ## Инструменты (function calling)
 
@@ -332,8 +404,8 @@ cat ~/.local/share/garak/garak_runs/baseline.report.jsonl \
 
 ```
 app/
-  chat/             # M4Б1/Б4.3: stateful история диалогов + мультимодальность
-    domain.py         # Pydantic-модели (Chat, ChatMessage + media_refs)
+  chat/             # M4Б1/Б4.3/Б4.4: история диалогов, мультимодальность, модерация
+    domain.py         # Pydantic-модели (Chat, ChatMessage + media_refs/latency_ms)
     repository.py     # Protocol-контракт хранилища
     repositories/
       json_repo.py    # JSONL-файловое хранилище
@@ -341,19 +413,29 @@ app/
       pg_models.py    # ORM-модели + миграция
     context.py        # tiktoken, sliding window
     media.py          # MIME-диспатч: image_url / Whisper-1 / pypdf / python-docx
-    service.py        # ChatService + SSE-генератор
-    routes.py         # /chats endpoints (multipart, /system-message)
+    service.py        # ChatService + SSE-генератор + модерация + latency
+    routes.py         # /chats endpoints (multipart, /system-message, /feedback)
     deps.py           # FastAPI Depends
-  bot/              # M4Б2/Б4.3: Telegram-бот
+  moderation/       # Б4.4: keyword-слой + опционально OpenAI Moderation API
+    service.py        # ModerationService, ModerationResult
+    moderation_keywords.yaml
+  admin/            # Б4.4: /chats/admin/* (только Postgres)
+    routes.py         # stats/users/broadcast(+pending/ack)
+    deps.py           # require_admin через X-Admin-Token
+  bot/              # M4Б2/Б4.3/Б4.4: Telegram-бот
     handlers/
+      admin.py        # /stats /users /broadcast, фильтр IsAdmin
+      feedback.py     # callback fb:<vote>:<message_id>
       fsm.py          # /ask FSM-сценарий (aiogram 3)
       text.py         # текстовые сообщения → sendMessageDraft-стрим
       media.py        # фото/голос/аудио/документы
     keyboards/
       inline.py       # клавиатура выбора темы
+      feedback.py     # клавиатура 👍/👎
     services/
-      backend_client.py  # httpx-клиент (multipart + JSON SSE), retry, таймауты
+      backend_client.py  # httpx-клиент (multipart + JSON SSE + admin), retry, таймауты
       streaming.py        # sendMessageDraft-стриминг, friendly_error
+      broadcast.py         # фоновый пул broadcast_queue
     web.py            # внутренний FastAPI: POST /notify
     states.py         # AskFlow StatesGroup
   routers/          # FastAPI endpoints (/chat, /health, /models)
@@ -369,15 +451,18 @@ app/
   settings/         # pydantic-settings, TOML + env
     chat.py           # ChatSettings
     bot.py            # BotSettings
+    moderation.py     # ModerationSettings
 
 modes/
   rest.py           # uvicorn-сервер
-  bot.py            # aiogram polling
+  bot.py            # aiogram polling + internal API + broadcast worker
 
 alembic/
   versions/
-    0001_chat_tables.py     # таблицы chats + chat_messages
-    0002_add_media_refs.py  # chat_messages.media_refs (JSONB)
+    0001_chat_tables.py               # таблицы chats + chat_messages
+    0002_add_media_refs.py            # chat_messages.media_refs (JSONB)
+    0003_moderation_feedback_broadcast.py  # message_feedback, moderation_incidents,
+                                            # broadcast_queue, chat_messages.latency_ms
 
 eval/
   golden_dataset.json     # 26 вопросов, 4 категории
@@ -389,9 +474,10 @@ eval/
     throttle_proxy.py     # rate-limiting прокси
 
 tests/
-  unit/             # legacy unit-тесты
-  chat/             # тесты репозиториев, сервиса, маршрутов
-  bot/              # тесты FSM и BackendClient
+  unit/             # legacy unit-тесты + test_moderation.py
+  chat/             # тесты репозиториев, сервиса, маршрутов, фидбека, модерации
+  admin/            # тесты /chats/admin/* (auth без БД + testcontainers Postgres)
+  bot/              # тесты FSM, BackendClient, admin-команд, feedback, broadcast
   conftest.py
 
 docs/

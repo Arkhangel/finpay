@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.chat.deps import ChatServiceDep, OpenAIClientDep
+from app.chat import feedback
+from app.chat.deps import ChatRepositoryDep, ChatServiceDep, OpenAIClientDep
 from app.chat.domain import Chat, ChatMessage
 from app.chat.media import media_to_part
 
@@ -29,6 +31,10 @@ class CreateChatOut(BaseModel):
 class SystemMessageIn(BaseModel):
     text: str
     notify: bool = False
+
+
+class FeedbackIn(BaseModel):
+    value: Literal["up", "down"]
 
 
 @router.post("", response_model=CreateChatOut, status_code=200)
@@ -57,6 +63,15 @@ async def send_message(
     content: str = Form(...),
     media: UploadFile | None = File(None),
 ) -> StreamingResponse:
+    # Проверяется здесь, а не внутри ChatService.send_message: генератор уже
+    # успел бы закоммитить статус 200 к моменту, когда там всплыло бы исключение.
+    mod_result = await svc.check_input(chat_id, content)
+    if not mod_result.allowed:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "moderation_blocked", "categories": mod_result.categories},
+        )
+
     media_part: dict | None = None
     media_meta: dict | None = None
 
@@ -72,9 +87,11 @@ async def send_message(
         }
 
     async def generator():
-        async for delta in svc.send_message(chat_id, content, media_part, media_meta):
+        result: dict = {}
+        async for delta in svc.send_message(chat_id, content, media_part, media_meta, result=result):
             yield f"data: {json.dumps({'type': 'token', 'delta': delta}, ensure_ascii=False)}\n\n"
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        message_id = result.get("message_id")
+        yield f"data: {json.dumps({'type': 'done', 'message_id': str(message_id) if message_id else None})}\n\n"
 
     return StreamingResponse(generator(), media_type="text/event-stream")
 
@@ -104,6 +121,18 @@ async def list_messages(
     chat_id: UUID, svc: ChatServiceDep, limit: int = 50
 ) -> list[ChatMessage]:
     return await svc.list_messages(chat_id, limit=limit)
+
+
+@router.post("/{chat_id}/messages/{message_id}/feedback")
+async def submit_feedback(
+    chat_id: UUID, message_id: UUID, body: FeedbackIn, svc: ChatServiceDep, repo: ChatRepositoryDep
+) -> dict:
+    chat = await svc.get_chat(chat_id)
+    if chat is None:
+        raise HTTPException(status_code=404, detail="Chat not found")
+
+    created = await feedback.save_feedback(repo, message_id, chat.owner_external_id, body.value)
+    return {"status": "ok", "recorded": created}
 
 
 @router.delete("/{chat_id}/messages")

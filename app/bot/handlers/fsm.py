@@ -9,6 +9,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from app.bot.keyboards.feedback import feedback_kb
 from app.bot.keyboards.inline import topics_kb
 from app.bot.services.backend_client import BackendClient
 from app.bot.services.streaming import friendly_error, stream_to_chat
@@ -75,7 +76,10 @@ async def fsm_question_received(
     prompt = f"Тема: {topic_label}. Вопрос: {message.text}"
 
     try:
-        await stream_to_chat(message, backend.send_message(UUID(chat_id), prompt))
+        result: dict = {}
+        sent = await stream_to_chat(message, backend.send_message(UUID(chat_id), prompt, result=result))
+        if result.get("message_id"):
+            await sent.edit_reply_markup(reply_markup=feedback_kb(result["message_id"]))
     except (httpx.ConnectError, httpx.ReadTimeout, httpx.HTTPStatusError) as exc:
         await message.answer(friendly_error(exc))
     except Exception:

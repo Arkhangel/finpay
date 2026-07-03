@@ -63,8 +63,18 @@ curl -N -X POST http://localhost:8000/chats/<chat_id>/messages \
 # data: {"type":"token","delta":"Привет"}
 # data: {"type":"token","delta":", Аня"}
 # ...
-# data: {"type":"done"}
+# data: {"type":"done","message_id":"<uuid ассистентского сообщения>"}
 ```
+
+`message_id` из `done` используется, например, ботом для клавиатуры фидбека
+👍/👎 (`POST /messages/{message_id}/feedback`, см. ниже).
+
+Перед стримом content проверяется `ModerationService.check_input` — если
+заблокирован, ответ `403 {"code": "moderation_blocked", "categories": [...]}`
+и SSE-стрим даже не открывается. Ответ модели после сборки полностью
+проверяется `check_output`: если нарушает правила, в историю пишется и
+дополнительно стримится заглушка "Не могу показать ответ — он мог нарушить
+правила" (см. `app/moderation/`, `app/chat/service.py`).
 
 С вложением (фото/голос/PDF/DOCX — см. `app/chat/media.py::media_to_part`):
 
@@ -116,6 +126,23 @@ curl -X POST http://localhost:9000/notify \
 Без верного `X-Internal-Token` эндпоинт отвечает `401`. Токен задаётся через
 `BOT__INTERNAL_TOKEN` (env) или `.config/local.toml`, в репозиторий не
 коммитится.
+
+### POST `/chats/{chat_id}/messages/{message_id}/feedback`
+Сохранить оценку ответа ассистента (`up`/`down`). Дедуп по
+`(owner_external_id, message_id)` — `owner_external_id` берётся из чата, а не
+из тела запроса; повторный голос того же пользователя по тому же сообщению
+не создаёт вторую запись (`recorded: false`).
+
+```bash
+curl -X POST http://localhost:8000/chats/<chat_id>/messages/<message_id>/feedback \
+  -H 'Content-Type: application/json' \
+  -d '{"value": "up"}'
+```
+
+### Admin API
+
+`/chats/admin/*` (stats/users/broadcast) требует Postgres и заголовок
+`X-Admin-Token` — подробности в разделе «Production-обвязка» в [`README.md`](../README.md).
 
 ### GET `/chats/{chat_id}/messages?limit=50`
 Получить список сообщений в хронологическом порядке.
@@ -187,8 +214,37 @@ CREATE TABLE chat_messages (
     content TEXT NOT NULL,
     tokens INT,
     media_refs JSONB,       -- {mime, size, filename, part} — см. app/chat/media.py
+    latency_ms INT,         -- время генерации ответа ассистента (для admin/stats)
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ  -- NULL = активное, NOT NULL = soft-deleted
+);
+
+-- Б4.4: production-обвязка
+CREATE TABLE message_feedback (
+    id UUID PRIMARY KEY,
+    message_id UUID NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+    owner_external_id TEXT NOT NULL,
+    value TEXT NOT NULL,    -- "up" | "down"
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (owner_external_id, message_id)
+);
+
+CREATE TABLE moderation_incidents (
+    id UUID PRIMARY KEY,
+    chat_id UUID NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+    direction TEXT NOT NULL,     -- "input" | "output"
+    blocked_by TEXT NOT NULL,    -- "keyword" | "openai_moderation"
+    categories JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE broadcast_queue (
+    id UUID PRIMARY KEY,
+    message TEXT NOT NULL,
+    interface TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending | sent | failed
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    processed_at TIMESTAMPTZ
 );
 ```
 

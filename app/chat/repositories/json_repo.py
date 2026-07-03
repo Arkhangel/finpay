@@ -104,3 +104,50 @@ class JsonChatRepository:
         marker = json.dumps({"type": _SOFT_DELETE_TYPE, "at": datetime.now(timezone.utc).isoformat()})
         async with aiofiles.open(path, "a") as f:
             await f.write(marker + "\n")
+
+    async def _feedback_path(self) -> Path:
+        return self._base / "feedback.jsonl"
+
+    async def save_feedback(
+        self, message_id: UUID, owner_external_id: str, value: str
+    ) -> bool:
+        path = await self._feedback_path()
+        await aiofiles.os.makedirs(path.parent, exist_ok=True)
+        try:
+            async with aiofiles.open(path) as f:
+                lines = await f.readlines()
+        except (FileNotFoundError, OSError):
+            lines = []
+
+        key = (owner_external_id, str(message_id))
+        for line in lines:
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if (obj.get("owner_external_id"), obj.get("message_id")) == key:
+                return False
+
+        entry = {
+            "message_id": str(message_id),
+            "owner_external_id": owner_external_id,
+            "value": value,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        async with aiofiles.open(path, "a") as f:
+            await f.write(json.dumps(entry) + "\n")
+        return True
+
+    async def record_moderation_incident(
+        self, chat_id: UUID, direction: str, blocked_by: str, categories: list[str]
+    ) -> None:
+        path = self._chat_dir(chat_id) / "moderation_incidents.jsonl"
+        await aiofiles.os.makedirs(path.parent, exist_ok=True)
+        entry = {
+            "direction": direction,
+            "blocked_by": blocked_by,
+            "categories": categories,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        async with aiofiles.open(path, "a") as f:
+            await f.write(json.dumps(entry) + "\n")

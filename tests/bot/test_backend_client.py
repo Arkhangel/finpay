@@ -73,6 +73,23 @@ async def test_send_message_parses_sse_token_events():
     await client.close()
 
 
+async def test_send_message_fills_result_with_message_id():
+    message_id = uuid4()
+    sse_body = _sse(
+        {"type": "token", "delta": "ok"},
+        {"type": "done", "message_id": str(message_id)},
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=sse_body, headers={"content-type": "text/event-stream"})
+
+    client = _make_client(httpx.MockTransport(handler))
+    result: dict = {}
+    [c async for c in client.send_message(uuid4(), "hello", result=result)]
+    assert result["message_id"] == message_id
+    await client.close()
+
+
 async def test_send_message_stops_at_done():
     sse_body = _sse(
         {"type": "token", "delta": "chunk1"},

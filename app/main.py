@@ -23,6 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.exceptions.handlers import setup_exception_handlers
 from app.lifespan import lifespan
+from app.admin import routes as admin_routes
 from app.chat import routes as chat_domain
 from app.routers import chat, health, models
 from app.settings import settings
@@ -71,6 +72,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(models.router)
     app.include_router(chat_domain.router)
+    app.include_router(admin_routes.router)
 
     return app
 

@@ -90,3 +90,41 @@ async def test_new_messages_visible_after_soft_delete(repo):
 async def test_list_messages_unknown_chat_returns_empty(repo):
     messages = await repo.list_messages(uuid4())
     assert messages == []
+
+
+# ── feedback / moderation incidents (Б4.4) ──────────────────────────────────────
+#
+# Postgres enforces message_feedback.message_id -> chat_messages.id (FK), so
+# every feedback test must vote on a message that actually exists — a random
+# uuid4() only "works" against the JSON repo, which has no such constraint.
+
+async def _make_message(repo) -> ChatMessage:
+    chat = await _make_chat(repo)
+    return await repo.append_message(chat.id, ChatMessage(chat_id=chat.id, role="assistant", content="hi"))
+
+
+async def test_save_feedback_first_vote_is_recorded(repo):
+    message = await _make_message(repo)
+    created = await repo.save_feedback(message.id, "user-1", "up")
+    assert created is True
+
+
+async def test_save_feedback_duplicate_owner_message_is_rejected(repo):
+    message = await _make_message(repo)
+    first = await repo.save_feedback(message.id, "user-1", "up")
+    second = await repo.save_feedback(message.id, "user-1", "down")
+    assert first is True
+    assert second is False
+
+
+async def test_save_feedback_same_message_different_owners_both_recorded(repo):
+    message = await _make_message(repo)
+    first = await repo.save_feedback(message.id, "user-1", "up")
+    second = await repo.save_feedback(message.id, "user-2", "up")
+    assert first is True
+    assert second is True
+
+
+async def test_record_moderation_incident_does_not_raise(repo):
+    chat = await _make_chat(repo)
+    await repo.record_moderation_incident(chat.id, "input", "keyword", ["fraud"])

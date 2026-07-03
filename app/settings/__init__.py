@@ -3,12 +3,13 @@ import os
 import traceback
 from functools import lru_cache
 
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 from pydantic_settings import SettingsConfigDict, BaseSettings, PydanticBaseSettingsSource, TomlConfigSettingsSource, \
     SettingsError
 
 from app.settings.bot import BotSettings
 from app.settings.chat import ChatSettings
+from app.settings.moderation import ModerationSettings
 from app.settings.openai import OpenAISettings
 from app.settings.redis import RedisSettings
 
@@ -23,9 +24,12 @@ class Settings(BaseSettings):
     redis: RedisSettings = RedisSettings()
     chat: ChatSettings = ChatSettings()
     bot: BotSettings = BotSettings()
+    moderation: ModerationSettings = ModerationSettings()
     cors_origins: list[str] = ["http://localhost:3000"]
 
     security_enabled: bool = True
+    # Общий секрет для /chats/admin/* (сверяется в app/admin/deps.py::require_admin)
+    admin_token: SecretStr = SecretStr("")
 
     host: str = "127.0.0.1"
     port: int = 8000
