@@ -11,6 +11,7 @@ from aiogram.types import CallbackQuery, Message
 
 from app.bot.keyboards.inline import topics_kb
 from app.bot.services.backend_client import BackendClient
+from app.bot.services.streaming import friendly_error, stream_to_chat
 from app.bot.states import AskFlow
 
 router = Router()
@@ -66,35 +67,19 @@ async def fsm_question_received(
             )
             await state.update_data(backend_chat_id=str(cid))
             chat_id = str(cid)
-        except (httpx.ConnectError, httpx.ReadTimeout, httpx.HTTPStatusError):
+        except (httpx.ConnectError, httpx.ReadTimeout, httpx.HTTPStatusError) as exc:
             await state.clear()
-            await message.answer("Не удалось подключиться к серверу. Попробуйте позже.")
+            await message.answer(friendly_error(exc))
             return
 
     prompt = f"Тема: {topic_label}. Вопрос: {message.text}"
 
-    sent = await message.answer("⏳")
-    buffer = ""
-
     try:
-        import asyncio
-        last_edit = asyncio.get_event_loop().time()
-
-        async for chunk in backend.send_message(UUID(chat_id), prompt):
-            buffer += chunk
-            now = asyncio.get_event_loop().time()
-            if now - last_edit >= 0.6:
-                await sent.edit_text(buffer)
-                last_edit = now
-
-        if buffer:
-            await sent.edit_text(buffer)
-        else:
-            await sent.edit_text("(нет ответа)")
-
-    except (httpx.ConnectError, httpx.ReadTimeout):
-        await sent.edit_text("Не удалось подключиться к серверу. Попробуйте позже.")
-    except httpx.HTTPStatusError as e:
-        await sent.edit_text(f"Ошибка сервера: {e.response.status_code}")
+        await stream_to_chat(message, backend.send_message(UUID(chat_id), prompt))
+    except (httpx.ConnectError, httpx.ReadTimeout, httpx.HTTPStatusError) as exc:
+        await message.answer(friendly_error(exc))
+    except Exception:
+        logger.exception("unexpected_error_in_fsm_question_handler")
+        await message.answer("Произошла непредвиденная ошибка. Попробуйте ещё раз.")
     finally:
         await state.clear()

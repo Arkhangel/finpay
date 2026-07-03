@@ -29,6 +29,26 @@ services:
       - ./data:/app/data
     restart: unless-stopped
 
+  bot:
+    build: .
+    image: finpay-service:v1
+    command: ["python", "main.py", "bot"]
+    ports:
+      - "9000:9000"
+    environment:
+      BOT__TOKEN: ${BOT__TOKEN}
+      BOT__BACKEND_URL: http://app:8000
+      BOT__BOT_URL: http://bot:9000
+      BOT__INTERNAL_TOKEN: ${BOT__INTERNAL_TOKEN}
+      BOT__BOT_API_PORT: 9000
+      OPENAI__API_KEY: ${OPENAI__API_KEY}
+      OPENAI__HOST: ${OPENAI__HOST:-https://api.groq.com/openai/v1}
+      OPENAI__MODEL: ${OPENAI__MODEL:-llama-3.1-8b-instant}
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+
   phoenix:
     image: arizephoenix/phoenix:latest
     ports:

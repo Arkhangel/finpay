@@ -54,16 +54,68 @@ curl http://localhost:8000/chats/<chat_id>
 
 ### POST `/chats/{chat_id}/messages`
 Отправить сообщение пользователя; возвращает SSE-стрим токенов ответа ассистента.
+Тело — `multipart/form-data`: `content` (обязательно) и `media` (опционально,
+файл — картинка/голос/PDF/DOCX). Отдельного `/messages/with-media` нет.
 
 ```bash
 curl -N -X POST http://localhost:8000/chats/<chat_id>/messages \
-  -H 'Content-Type: application/json' \
-  -d '{"content": "Привет, меня зовут Аня"}'
-# data: Привет
-# data: , Аня
+  -F 'content=Привет, меня зовут Аня'
+# data: {"type":"token","delta":"Привет"}
+# data: {"type":"token","delta":", Аня"}
 # ...
-# data: [DONE]
+# data: {"type":"done"}
 ```
+
+С вложением (фото/голос/PDF/DOCX — см. `app/chat/media.py::media_to_part`):
+
+```bash
+curl -N -X POST http://localhost:8000/chats/<chat_id>/messages \
+  -F 'content=что на фото?' \
+  -F 'media=@photo.jpg;type=image/jpeg'
+```
+
+MIME-диспатч (без FFmpeg/subprocess):
+
+| MIME | Content-part |
+|------|--------------|
+| `image/*` | `image_url` напрямую в `chat.completions` |
+| `audio/*`, `application/ogg` | `text` — расшифровка через Whisper-1 |
+| `application/pdf` | `text` — извлечённый текст (`pypdf`, до 50 страниц) |
+| `*wordprocessingml.document` (docx) | `text` — извлечённый текст (`python-docx`) |
+| неизвестный MIME | `415 Unsupported media type` |
+
+Вложение сохраняется в `ChatMessage.media_refs` (mime/size/filename/`part`) и
+восстанавливается как мультимодальный `content` при последующих LLM-вызовах
+того же чата — модель может «пересмотреть» исходное фото в следующей реплике.
+
+### POST `/chats/{chat_id}/system-message`
+Демо-эндпоинт для симуляции завершения фоновой задачи (статус заявки,
+подписка и т.п.). Дописывает сообщение от лица ассистента и, если
+`notify: true`, шлёт проактивное уведомление в Telegram через бота (см. ниже).
+
+```bash
+curl -X POST http://localhost:8000/chats/<chat_id>/system-message \
+  -H 'Content-Type: application/json' \
+  -d '{"text": "Ваша заявка #123 обработана", "notify": true}'
+```
+
+## Обратный канал backend → bot (`/notify`)
+
+Бот поднимает внутренний FastAPI рядом с polling (`app/bot/web.py`,
+`modes/bot.py`), на порту `bot.bot_api_port` (по умолчанию 9000). Backend
+дёргает его через `app/services/notifier.py::notify_user` для проактивных
+уведомлений.
+
+```bash
+curl -X POST http://localhost:9000/notify \
+  -H 'X-Internal-Token: <bot.internal_token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"chat_id": 123456789, "text": "Готово!"}'
+```
+
+Без верного `X-Internal-Token` эндпоинт отвечает `401`. Токен задаётся через
+`BOT__INTERNAL_TOKEN` (env) или `.config/local.toml`, в репозиторий не
+коммитится.
 
 ### GET `/chats/{chat_id}/messages?limit=50`
 Получить список сообщений в хронологическом порядке.
@@ -134,6 +186,7 @@ CREATE TABLE chat_messages (
     role TEXT NOT NULL,
     content TEXT NOT NULL,
     tokens INT,
+    media_refs JSONB,       -- {mime, size, filename, part} — см. app/chat/media.py
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ  -- NULL = активное, NOT NULL = soft-deleted
 );

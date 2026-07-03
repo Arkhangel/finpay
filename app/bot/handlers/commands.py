@@ -9,32 +9,30 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from app.bot.services.backend_client import BackendClient
+from app.bot.services.streaming import friendly_error
 
 router = Router()
 
 
 async def _get_or_init_chat(
     message: Message, state: FSMContext, backend: BackendClient
-) -> UUID | None:
+) -> UUID:
+    """Returns the cached/created backend chat id. Raises on network/HTTP errors."""
     data = await state.get_data()
     chat_id = data.get("backend_chat_id")
     if chat_id:
         return UUID(chat_id)
-    try:
-        chat_id = await backend.get_or_create_chat(
-            str(message.from_user.id), "telegram"
-        )
-        await state.update_data(backend_chat_id=str(chat_id))
-        return chat_id
-    except (httpx.ConnectError, httpx.ReadTimeout, httpx.HTTPStatusError):
-        return None
+    chat_id = await backend.get_or_create_chat(str(message.from_user.id), "telegram")
+    await state.update_data(backend_chat_id=str(chat_id))
+    return chat_id
 
 
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext, backend: BackendClient) -> None:
-    chat_id = await _get_or_init_chat(message, state, backend)
-    if chat_id is None:
-        await message.answer("Не удалось подключиться к серверу. Попробуйте позже.")
+    try:
+        await _get_or_init_chat(message, state, backend)
+    except (httpx.ConnectError, httpx.ReadTimeout, httpx.HTTPStatusError) as exc:
+        await message.answer(friendly_error(exc))
         return
     await message.answer(
         "Привет! Я FinPay-ассистент 💳\n\n"
@@ -68,10 +66,8 @@ async def cmd_clear(message: Message, state: FSMContext, backend: BackendClient)
     try:
         await backend.clear_messages(UUID(chat_id))
         await message.answer("История очищена. Начинаем с чистого листа ✨")
-    except (httpx.ConnectError, httpx.ReadTimeout):
-        await message.answer("Не удалось подключиться к серверу. Попробуйте позже.")
-    except httpx.HTTPStatusError as e:
-        await message.answer(f"Ошибка сервера: {e.response.status_code}")
+    except (httpx.ConnectError, httpx.ReadTimeout, httpx.HTTPStatusError) as exc:
+        await message.answer(friendly_error(exc))
 
 
 @router.message(Command("cancel"))

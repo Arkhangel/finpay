@@ -89,7 +89,12 @@ async def test_question_clears_state_after_response():
     message = MagicMock()
     message.from_user = MagicMock(id=42)
     message.text = "Как оплатить счёт?"
-    message.answer = AsyncMock(return_value=MagicMock(edit_text=AsyncMock()))
+    message.chat = MagicMock(id=100)
+    message.bot = MagicMock(
+        send_message_draft=AsyncMock(),
+        send_chat_action=AsyncMock(),
+        send_message=AsyncMock(),
+    )
 
     async def fake_stream(*args, **kwargs):
         yield "Ответ на вопрос"
@@ -100,3 +105,6 @@ async def test_question_clears_state_after_response():
     await fsm_question_received(message, state, backend)
 
     assert await state.get_state() is None
+    message.bot.send_message.assert_awaited_once_with(
+        chat_id=100, text="Ответ на вопрос"
+    )

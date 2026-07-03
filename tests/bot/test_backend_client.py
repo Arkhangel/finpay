@@ -51,10 +51,18 @@ async def test_get_or_create_chat_is_idempotent():
     await client.close()
 
 
-# ── send_message (SSE) ────────────────────────────────────────────────────────
+# ── send_message (SSE, JSON payloads) ──────────────────────────────────────────
 
-async def test_send_message_parses_sse_chunks():
-    sse_body = "data: Привет\n\ndata:  мир\n\ndata: [DONE]\n\n"
+def _sse(*events: dict) -> str:
+    return "".join(f"data: {json.dumps(e)}\n\n" for e in events)
+
+
+async def test_send_message_parses_sse_token_events():
+    sse_body = _sse(
+        {"type": "token", "delta": "Привет"},
+        {"type": "token", "delta": " мир"},
+        {"type": "done"},
+    )
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text=sse_body, headers={"content-type": "text/event-stream"})
@@ -66,7 +74,10 @@ async def test_send_message_parses_sse_chunks():
 
 
 async def test_send_message_stops_at_done():
-    sse_body = "data: chunk1\n\ndata: [DONE]\n\ndata: chunk2\n\n"
+    sse_body = _sse(
+        {"type": "token", "delta": "chunk1"},
+        {"type": "done"},
+    ) + _sse({"type": "token", "delta": "chunk2"})
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text=sse_body, headers={"content-type": "text/event-stream"})
@@ -75,6 +86,56 @@ async def test_send_message_stops_at_done():
     chunks = [c async for c in client.send_message(uuid4(), "hello")]
     assert "chunk2" not in chunks
     assert "chunk1" in chunks
+    await client.close()
+
+
+async def test_send_message_without_media_sends_no_files():
+    received: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return httpx.Response(
+            200,
+            text=_sse({"type": "done"}),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    client = _make_client(httpx.MockTransport(handler))
+    [c async for c in client.send_message(uuid4(), "hello")]
+
+    assert len(received) == 1
+    content_type = received[0].headers.get("content-type", "")
+    assert "multipart/form-data" not in content_type
+    await client.close()
+
+
+async def test_send_message_with_media_sends_multipart():
+    received: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return httpx.Response(
+            200,
+            text=_sse({"type": "token", "delta": "ok"}, {"type": "done"}),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    client = _make_client(httpx.MockTransport(handler))
+    chat_id = uuid4()
+    chunks = [
+        c
+        async for c in client.send_message(
+            chat_id, "caption", media=b"\x89PNG\r\n", mime="image/png"
+        )
+    ]
+
+    assert chunks == ["ok"]
+    assert len(received) == 1
+    request = received[0]
+    assert str(chat_id) in str(request.url)
+    assert "multipart/form-data" in request.headers.get("content-type", "")
+    assert b"caption" in request.content
+    assert b"\x89PNG\r\n" in request.content
     await client.close()
 
 
@@ -93,4 +154,39 @@ async def test_clear_messages_sends_delete_to_correct_url():
     assert len(received) == 1
     assert received[0].method == "DELETE"
     assert str(chat_id) in str(received[0].url)
+    await client.close()
+
+
+# ── retry on connect errors ─────────────────────────────────────────────────────
+
+async def test_get_or_create_chat_retries_on_connect_error_then_succeeds():
+    attempts = 0
+    chat_id = uuid4()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise httpx.ConnectError("boom", request=request)
+        return httpx.Response(200, json={"chat_id": str(chat_id)})
+
+    client = _make_client(httpx.MockTransport(handler))
+    result = await client.get_or_create_chat("user-1", "telegram")
+    assert result == chat_id
+    assert attempts == 3
+    await client.close()
+
+
+async def test_get_or_create_chat_does_not_retry_on_http_status_error():
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(500, json={"detail": "boom"})
+
+    client = _make_client(httpx.MockTransport(handler))
+    with pytest.raises(httpx.HTTPStatusError):
+        await client.get_or_create_chat("user-1", "telegram")
+    assert attempts == 1
     await client.close()

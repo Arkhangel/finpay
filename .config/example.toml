@@ -12,6 +12,7 @@ security_enabled = true
 api_key = ""
 host = "https://api.groq.com/openai/v1"
 model = ""
+whisper_model = "whisper-1"       # STT-модель для голосовых сообщений (см. app/chat/media.py)
 
 [redis]
 url = "redis://localhost:6379"
@@ -22,6 +23,9 @@ ttl = 3600
 token = ""                        # Telegram bot token from @BotFather
 backend_url = "http://localhost:8000"
 admin_ids = []
+bot_url = "http://localhost:9000"        # backend -> bot: базовый URL для POST /notify
+internal_token = ""                      # общий секрет для /notify, задавать через BOT__INTERNAL_TOKEN, в репозиторий не коммитить
+bot_api_port = 9000                       # порт, на котором бот поднимает свой внутренний FastAPI (/notify)
 
 [chat]
 repository = "json"           # "json" | "postgres"

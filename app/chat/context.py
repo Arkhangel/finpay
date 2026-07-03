@@ -19,13 +19,26 @@ def _get_encoding() -> tiktoken.Encoding:
     return _ENCODING
 
 
+def _content_text(content: Any) -> str:
+    # Мультимодальный content — список parts; image/audio в токен-бюджет не считаем.
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            part.get("text", "")
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    return ""
+
+
 def count_tokens(messages: list[dict[str, Any]]) -> int:
     """Count tokens for a list of OpenAI-format messages (ChatML overhead included)."""
     enc = _get_encoding()
     total = 2  # +2 overhead for the conversation
     for msg in messages:
         total += 4  # +4 per message (role + content framing)
-        total += len(enc.encode(msg.get("content") or ""))
+        total += len(enc.encode(_content_text(msg.get("content"))))
         total += len(enc.encode(msg.get("role") or ""))
     return total
 

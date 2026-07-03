@@ -49,3 +49,4 @@ def get_chat_service(
 
 
 ChatServiceDep = Annotated[ChatService, Depends(get_chat_service)]
+OpenAIClientDep = Annotated[AsyncOpenAI, Depends(get_openai_client)]

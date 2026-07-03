@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -52,6 +52,7 @@ class PostgresChatRepository:
             role=message.role,
             content=message.content,
             tokens=message.tokens,
+            media_refs=message.media_refs,
             created_at=message.created_at,
         )
         self._session.add(row)

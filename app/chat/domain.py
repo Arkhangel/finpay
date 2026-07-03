@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
@@ -14,6 +14,8 @@ class ChatMessage(BaseModel):
     content: str
     tokens: int | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    # {mime, size, filename, part} — part восстанавливается в следующих LLM-вызовах.
+    media_refs: dict[str, Any] | None = None
 
 
 class Chat(BaseModel):

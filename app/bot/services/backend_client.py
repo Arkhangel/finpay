@@ -1,20 +1,33 @@
 from __future__ import annotations
 
+import json
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncIterator
 from uuid import UUID
 
 import httpx
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_TIMEOUT = httpx.Timeout(connect=3.0, read=60.0, write=10.0, pool=5.0)
+_STREAM_TIMEOUT = httpx.Timeout(connect=3.0, read=120.0, write=10.0, pool=5.0)
+
+# Ретраится только соединение — 5xx может значить, что LLM-вызов уже оплачен на бэкенде.
+_retry_on_connect_error = retry(
+    retry=retry_if_exception_type((httpx.ConnectError, httpx.ConnectTimeout)),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=0.5, max=4),
+    reraise=True,
+)
 
 
 class BackendClient:
     def __init__(self, base_url: str) -> None:
-        self._client = httpx.AsyncClient(base_url=base_url, timeout=30)
-        # Local cache: (owner_external_id, interface) -> chat_id
+        self._client = httpx.AsyncClient(base_url=base_url, timeout=_DEFAULT_TIMEOUT)
         self._chat_cache: dict[tuple[str, str], UUID] = {}
 
+    @_retry_on_connect_error
     async def get_or_create_chat(self, owner_external_id: str, interface: str) -> UUID:
         key = (owner_external_id, interface)
         if key in self._chat_cache:
@@ -30,23 +43,33 @@ class BackendClient:
         return chat_id
 
     async def send_message(
-        self, chat_id: UUID, content: str
-    ) -> AsyncGenerator[str, None]:
+        self,
+        chat_id: UUID,
+        content: str,
+        media: bytes | None = None,
+        mime: str | None = None,
+    ) -> AsyncIterator[str]:
+        # Без ретрая: частично отданный стрим нельзя повторить, не задвоив LLM-вызов.
+        files = {"media": ("file.bin", media, mime)} if media else None
+        data = {"content": content}
         async with self._client.stream(
             "POST",
             f"/chats/{chat_id}/messages",
-            json={"content": content},
+            data=data,
+            files=files,
+            timeout=_STREAM_TIMEOUT,
         ) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():
                 if not line.startswith("data: "):
                     continue
-                data = line[6:]
-                if data == "[DONE]":
-                    break
-                if data:
-                    yield data
+                payload = json.loads(line.removeprefix("data: "))
+                if payload["type"] == "token":
+                    yield payload["delta"]
+                elif payload["type"] == "done":
+                    return
 
+    @_retry_on_connect_error
     async def clear_messages(self, chat_id: UUID) -> None:
         resp = await self._client.delete(f"/chats/{chat_id}/messages")
         resp.raise_for_status()

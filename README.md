@@ -57,8 +57,11 @@ context_window   = 10                       # N последних сообще�
 database_url     = "postgresql+asyncpg://postgres:postgres@localhost:5432/finpay"
 
 [bot]
-token       = ""                            # токен от @BotFather
-backend_url = "http://localhost:8000"       # адрес REST API
+token          = ""                            # токен от @BotFather
+backend_url    = "http://localhost:8000"       # адрес REST API
+bot_url        = "http://localhost:9000"       # backend -> bot: базовый URL для /notify
+internal_token = ""                            # секрет для /notify (BOT__INTERNAL_TOKEN)
+bot_api_port   = 9000                          # порт внутреннего API бота
 
 security_enabled = true                     # false — отключить security-слой
 ```
@@ -137,23 +140,33 @@ ENVIRONMENT=local uv run alembic upgrade head
 |-------|------|----------|
 | `POST` | `/chats` | Создать чат |
 | `GET` | `/chats/{id}` | Метаданные чата |
-| `POST` | `/chats/{id}/messages` | Отправить сообщение → SSE-стрим |
+| `POST` | `/chats/{id}/messages` | Отправить сообщение (multipart, опционально с `media`) → SSE-стрим JSON-событий |
 | `GET` | `/chats/{id}/messages` | История сообщений |
 | `DELETE` | `/chats/{id}/messages` | Мягкое удаление истории |
+| `POST` | `/chats/{id}/system-message` | Демо: фоновая задача завершилась (+ опциональный `/notify` в Telegram) |
 
-Подробнее: [`docs/chat.md`](docs/chat.md)
+Мультимодальность (фото/голос/PDF/DOCX) и формат SSE-событий — подробнее в [`docs/chat.md`](docs/chat.md).
 
 ## Telegram-бот
 
-Тонкий клиент к Chat API. Сценарий: `/ask` → выбор темы → вопрос → SSE-ответ в чат.
+Тонкий клиент к Chat API. Сценарий: `/ask` → выбор темы → вопрос → стрим в чат
+через нативный `sendMessageDraft`. Принимает фото, голос и PDF/DOCX-документы
+(конвертация в content-part происходит на backend — бот не импортирует
+`openai`/`pypdf`/`python-docx`). Все запросы к backend идут через единый
+`BackendClient.send_message(chat_id, content, media=None, mime=None)`.
+
+Бот также поднимает внутренний HTTP-эндпоинт `POST /notify` (порт
+`bot.bot_api_port`, защищён заголовком `X-Internal-Token`) — backend
+использует его для проактивных уведомлений (см. `app/services/notifier.py`).
 
 ### Запуск бота
 
 ```bash
-# Прописать токен в .config/local.toml:
+# Прописать в .config/local.toml:
 # [bot]
 # token = "123456:ABC-..."
 # backend_url = "http://localhost:8000"
+# internal_token = "локальный-секрет-для-notify"
 
 ENVIRONMENT=local uv run main.py bot
 ```
@@ -319,28 +332,34 @@ cat ~/.local/share/garak/garak_runs/baseline.report.jsonl \
 
 ```
 app/
-  chat/             # M4Б1: stateful история диалогов
-    domain.py         # Pydantic-модели (Chat, ChatMessage)
+  chat/             # M4Б1/Б4.3: stateful история диалогов + мультимодальность
+    domain.py         # Pydantic-модели (Chat, ChatMessage + media_refs)
     repository.py     # Protocol-контракт хранилища
     repositories/
       json_repo.py    # JSONL-файловое хранилище
       pg_repo.py      # PostgreSQL (async SQLAlchemy 2.x)
       pg_models.py    # ORM-модели + миграция
     context.py        # tiktoken, sliding window
+    media.py          # MIME-диспатч: image_url / Whisper-1 / pypdf / python-docx
     service.py        # ChatService + SSE-генератор
-    routes.py         # /chats endpoints
+    routes.py         # /chats endpoints (multipart, /system-message)
     deps.py           # FastAPI Depends
-  bot/              # M4Б2: Telegram-бот
+  bot/              # M4Б2/Б4.3: Telegram-бот
     handlers/
       fsm.py          # /ask FSM-сценарий (aiogram 3)
+      text.py         # текстовые сообщения → sendMessageDraft-стрим
+      media.py        # фото/голос/аудио/документы
     keyboards/
       inline.py       # клавиатура выбора темы
     services/
-      backend_client.py  # httpx-клиент + SSE-парсинг
+      backend_client.py  # httpx-клиент (multipart + JSON SSE), retry, таймауты
+      streaming.py        # sendMessageDraft-стриминг, friendly_error
+    web.py            # внутренний FastAPI: POST /notify
     states.py         # AskFlow StatesGroup
   routers/          # FastAPI endpoints (/chat, /health, /models)
   services/
     llm.py          # оркестрация LLM + tool calls
+    notifier.py     # backend -> bot: POST /notify
     security/       # input_validator, output_filter
   llm/client.py     # AsyncOpenAI-клиент
   prompts/          # Jinja2-шаблоны системного промпта
@@ -357,7 +376,8 @@ modes/
 
 alembic/
   versions/
-    0001_chat_tables.py   # таблицы chats + chat_messages
+    0001_chat_tables.py     # таблицы chats + chat_messages
+    0002_add_media_refs.py  # chat_messages.media_refs (JSONB)
 
 eval/
   golden_dataset.json     # 26 вопросов, 4 категории

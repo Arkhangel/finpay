@@ -1,6 +1,7 @@
 import asyncio
 import logging
 
+import uvicorn
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
@@ -9,6 +10,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from app.settings import settings
 from app.bot.handlers import build_router
 from app.bot.services.backend_client import BackendClient
+from app.bot.web import build_api
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +28,23 @@ async def _run() -> None:
 
     dp.include_router(build_router())
 
-    logger.info("Starting bot, backend=%s", settings.bot.backend_url)
+    api = build_api(bot, settings.bot.internal_token.get_secret_value())
+    server = uvicorn.Server(
+        uvicorn.Config(
+            api,
+            host="0.0.0.0",
+            port=settings.bot.bot_api_port,
+            log_level="info",
+        )
+    )
+
+    logger.info(
+        "Starting bot, backend=%s, internal_api_port=%d",
+        settings.bot.backend_url,
+        settings.bot.bot_api_port,
+    )
     try:
-        await dp.start_polling(bot)
+        await asyncio.gather(dp.start_polling(bot), server.serve())
     finally:
         await backend.close()
         await bot.session.close()

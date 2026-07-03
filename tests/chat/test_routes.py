@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import json
 from contextlib import asynccontextmanager
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
@@ -80,3 +82,129 @@ def test_delete_messages(client):
     resp = client.delete(f"/chats/{chat_id}/messages")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
+
+
+# ── POST /messages: multipart + streaming SSE (Б4.3) ───────────────────────────
+
+class _FakeStream:
+    def __init__(self, deltas: list[str]) -> None:
+        self._deltas = deltas
+
+    async def __aenter__(self) -> "_FakeStream":
+        return self
+
+    async def __aexit__(self, *exc) -> bool:
+        return False
+
+    def __aiter__(self):
+        return self._iter()
+
+    async def _iter(self):
+        for delta in self._deltas:
+            yield MagicMock(choices=[MagicMock(delta=MagicMock(content=delta))])
+
+
+def _fake_llm(deltas: list[str]) -> MagicMock:
+    llm = MagicMock()
+
+    async def fake_create(**kwargs):
+        fake_create.last_kwargs = kwargs
+        return _FakeStream(deltas)
+
+    llm.chat.completions.create = fake_create
+    return llm
+
+
+def _client_with_llm(tmp_path, llm):
+    from app.main import create_app
+    from app.chat.deps import get_chat_service
+    from app.chat.service import ChatService
+    from app.chat.repositories.json_repo import JsonChatRepository
+
+    repo = JsonChatRepository(base_dir=tmp_path)
+    svc = ChatService(repository=repo, llm_client=llm)
+
+    with patch("app.main.lifespan", _noop_lifespan):
+        app = create_app()
+
+    app.dependency_overrides[get_chat_service] = lambda: svc
+    return TestClient(app)
+
+
+def _parse_sse_events(body: str) -> list[dict]:
+    return [
+        json.loads(line.removeprefix("data: "))
+        for line in body.splitlines()
+        if line.startswith("data: ")
+    ]
+
+
+_PNG_1X1 = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
+
+
+def test_send_message_text_only_streams_json_sse(tmp_path):
+    llm = _fake_llm(["Привет", ", мир"])
+    with _client_with_llm(tmp_path, llm) as client:
+        chat_id = client.post(
+            "/chats", json={"owner_external_id": "user-1", "interface": "cli"}
+        ).json()["chat_id"]
+
+        resp = client.post(
+            f"/chats/{chat_id}/messages",
+            data={"content": "Привет!"},
+        )
+
+        assert resp.status_code == 200
+        events = _parse_sse_events(resp.text)
+        assert events == [
+            {"type": "token", "delta": "Привет"},
+            {"type": "token", "delta": ", мир"},
+            {"type": "done"},
+        ]
+
+
+def test_send_message_with_image_media_dispatches_to_image_url_part(tmp_path):
+    llm = _fake_llm(["ok"])
+    with _client_with_llm(tmp_path, llm) as client:
+        chat_id = client.post(
+            "/chats", json={"owner_external_id": "user-1", "interface": "cli"}
+        ).json()["chat_id"]
+
+        resp = client.post(
+            f"/chats/{chat_id}/messages",
+            data={"content": "что на фото?"},
+            files={"media": ("pic.png", _PNG_1X1, "image/png")},
+        )
+
+        assert resp.status_code == 200
+        events = _parse_sse_events(resp.text)
+        assert {"type": "done"} in events
+
+        sent_messages = llm.chat.completions.create.last_kwargs["messages"]
+        user_message = [m for m in sent_messages if m["role"] == "user"][-1]
+        assert isinstance(user_message["content"], list)
+        image_part = [p for p in user_message["content"] if p["type"] == "image_url"][0]
+        assert image_part["image_url"]["url"].startswith("data:image/png;base64,")
+
+        # Media survives into history and is restored for the next LLM call.
+        history = client.get(f"/chats/{chat_id}/messages").json()
+        user_history_msg = [m for m in history if m["role"] == "user"][-1]
+        assert user_history_msg["media_refs"]["mime"] == "image/png"
+
+
+def test_send_message_with_unsupported_media_returns_415(tmp_path):
+    llm = _fake_llm(["unused"])
+    with _client_with_llm(tmp_path, llm) as client:
+        chat_id = client.post(
+            "/chats", json={"owner_external_id": "user-1", "interface": "cli"}
+        ).json()["chat_id"]
+
+        resp = client.post(
+            f"/chats/{chat_id}/messages",
+            data={"content": "тут архив"},
+            files={"media": ("archive.zip", b"whatever", "application/zip")},
+        )
+
+        assert resp.status_code == 415

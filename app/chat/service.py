@@ -40,15 +40,25 @@ class ChatService:
         return await self._repo.list_messages(chat_id, limit=limit)
 
     async def send_message(
-        self, chat_id: UUID, user_content: str
+        self,
+        chat_id: UUID,
+        user_content: str,
+        media_part: dict | None = None,
+        media_meta: dict | None = None,
     ) -> AsyncGenerator[str, None]:
-        user_msg = ChatMessage(chat_id=chat_id, role="user", content=user_content)
+        media_refs = {**media_meta, "part": media_part} if media_part is not None else None
+        user_msg = ChatMessage(
+            chat_id=chat_id,
+            role="user",
+            content=user_content or "[медиа]",
+            media_refs=media_refs,
+        )
         await self._repo.append_message(chat_id, user_msg)
 
         chat = await self._repo.get_chat(chat_id)
         history = await self._repo.list_messages(chat_id, limit=settings.chat.context_window * 2)
 
-        raw_history = [{"role": m.role, "content": m.content} for m in history]
+        raw_history = [_to_openai_message(m) for m in history]
 
         messages = build_sliding_window_context(
             raw_history,
@@ -66,6 +76,7 @@ class ChatService:
                 model=model,
                 messages=messages,
                 stream=True,
+                stream_options={"include_usage": True},
             ) as stream:
                 async for chunk in stream:
                     if not chunk.choices:
@@ -91,3 +102,17 @@ class ChatService:
 
     async def clear_history(self, chat_id: UUID) -> None:
         await self._repo.soft_delete_messages(chat_id)
+
+    async def append_system_message(self, chat_id: UUID, text: str) -> ChatMessage:
+        message = ChatMessage(chat_id=chat_id, role="assistant", content=text)
+        return await self._repo.append_message(chat_id, message)
+
+
+def _to_openai_message(message: ChatMessage) -> dict:
+    part = (message.media_refs or {}).get("part")
+    if part is None:
+        return {"role": message.role, "content": message.content}
+    return {
+        "role": message.role,
+        "content": [{"type": "text", "text": message.content}, part],
+    }
