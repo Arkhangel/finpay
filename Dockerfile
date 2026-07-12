@@ -14,6 +14,14 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     uv sync --frozen --no-install-project --no-dev
 
+# Эмбеддинг-модель (М5.1) — качаем на этапе сборки образа, а не при первом
+# запросе в проде: контейнер стартует без сетевой зависимости от HuggingFace.
+# Модель должна совпадать с default в app/settings/embeddings.py.
+# Путь HF_HOME должен совпадать в runtime-стадии ниже, иначе кеш не найдётся.
+ENV HF_HOME=/app/.cache/huggingface
+RUN /app/.venv/bin/python -c \
+    "from sentence_transformers import SentenceTransformer; SentenceTransformer('intfloat/multilingual-e5-base')"
+
 COPY . .
 
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -30,7 +38,8 @@ USER appuser
 
 WORKDIR /app
 
-ENV PATH="/app/.venv/bin:$PATH"
+ENV PATH="/app/.venv/bin:$PATH" \
+    HF_HOME=/app/.cache/huggingface
 
 EXPOSE 8000
 

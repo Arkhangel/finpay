@@ -15,6 +15,12 @@ host = "https://api.groq.com/openai/v1"
 model = ""
 whisper_model = "whisper-1"       # STT-модель для голосовых сообщений (см. app/chat/media.py)
 
+[embeddings]
+model = "intfloat/multilingual-e5-base"  # self-hosted, скачивается с HuggingFace при первом использовании
+device = "cpu"
+batch_size = 32                          # 16-32 рекомендуется для sentence-transformers на CPU
+cache_dir = ".cache/embeddings"
+
 [redis]
 url = "redis://localhost:6379"
 password = ""

@@ -249,6 +249,31 @@ ENVIRONMENT=local uv run main.py rest
 пользователя по тому же сообщению просто игнорируется), после чего бот
 убирает клавиатуру через `edit_reply_markup(reply_markup=None)`.
 
+## Эмбеддинги (М5.1)
+
+`app/services/embeddings.py` — переиспользуемый сервис эмбеддингов для
+дипломного RAG-ассистента: self-hosted `intfloat/multilingual-e5-base`
+(sentence-transformers, CPU) — текст обращений не уходит во внешний API, что
+важно для финтех-домена (см. `ADR-003` в [`docs/architecture.md`](docs/architecture.md)).
+
+Публичный интерфейс: `embed_texts(texts)`, а также асимметричные
+`embed_query(text)` / `embed_documents(texts)` с префиксами `query:`/`passage:`
+(E5-модель). Батчинг (`batch_size=32`), диск-кеш (`diskcache`, инвалидируется
+при смене модели), retry на ошибки загрузки модели (`tenacity`).
+
+Модель (~1.1GB) скачивается с HuggingFace при первом использовании — ключи и
+оплата не нужны.
+
+```bash
+# Оценка времени индексации на реальном корпусе проекта (self-hosted — $0 API)
+uv run scripts/estimate_embedding_cost.py
+
+# Смоук-тест: латентность кеша + деградация score без query:/passage: префиксов
+ENVIRONMENT=local uv run scripts/embeddings_smoke.py
+```
+
+Mini-benchmark (`query`/`relevant`/`irrelevant`) — [`tests/eval/mini_benchmark.json`](tests/eval/mini_benchmark.json).
+
 ## Инструменты (function calling)
 
 | Tool | Описание |
@@ -442,6 +467,7 @@ app/
   services/
     llm.py          # оркестрация LLM + tool calls
     notifier.py     # backend -> bot: POST /notify
+    embeddings.py   # М5.1: embed_texts — батчинг, retry, диск-кеш
     security/       # input_validator, output_filter
   llm/client.py     # AsyncOpenAI-клиент
   prompts/          # Jinja2-шаблоны системного промпта
@@ -452,6 +478,7 @@ app/
     chat.py           # ChatSettings
     bot.py            # BotSettings
     moderation.py     # ModerationSettings
+    embeddings.py     # EmbeddingsSettings (М5.1)
 
 modes/
   rest.py           # uvicorn-сервер
@@ -474,10 +501,12 @@ eval/
     throttle_proxy.py     # rate-limiting прокси
 
 tests/
-  unit/             # legacy unit-тесты + test_moderation.py
+  unit/             # legacy unit-тесты + test_moderation.py + test_embeddings.py
   chat/             # тесты репозиториев, сервиса, маршрутов, фидбека, модерации
   admin/            # тесты /chats/admin/* (auth без БД + testcontainers Postgres)
   bot/              # тесты FSM, BackendClient, admin-команд, feedback, broadcast
+  eval/
+    mini_benchmark.json  # М5.1: 5-10 пар (query, relevant, irrelevant)
   conftest.py
 
 docs/

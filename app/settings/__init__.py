@@ -9,6 +9,7 @@ from pydantic_settings import SettingsConfigDict, BaseSettings, PydanticBaseSett
 
 from app.settings.bot import BotSettings
 from app.settings.chat import ChatSettings
+from app.settings.embeddings import EmbeddingsSettings
 from app.settings.moderation import ModerationSettings
 from app.settings.openai import OpenAISettings
 from app.settings.redis import RedisSettings
@@ -21,6 +22,7 @@ class Settings(BaseSettings):
     project_name: str = "FinPay"
 
     openai: OpenAISettings = OpenAISettings()
+    embeddings: EmbeddingsSettings = EmbeddingsSettings()
     redis: RedisSettings = RedisSettings()
     chat: ChatSettings = ChatSettings()
     bot: BotSettings = BotSettings()

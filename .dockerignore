@@ -9,6 +9,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .config/local.toml
+.cache/
 tests/
 notebooks/
 data/
