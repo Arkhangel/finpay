@@ -274,6 +274,32 @@ ENVIRONMENT=local uv run scripts/embeddings_smoke.py
 
 Mini-benchmark (`query`/`relevant`/`irrelevant`) — [`tests/eval/mini_benchmark.json`](tests/eval/mini_benchmark.json).
 
+## Векторное хранилище (М5.2)
+
+Qdrant — сервис `qdrant` в `compose.yaml` (порт `6333` REST/дашборд, `6334`
+gRPC, volume `qdrant_storage`). `app/services/vector_store.py::VectorStore` —
+тонкая асинхронная обёртка над `AsyncQdrantClient` (`ensure_collection` /
+`upsert` / `search`), клиент создаётся один раз в `app/lifespan.py` и живёт в
+`app.state` (как Redis) — если Qdrant недоступен при старте, поиск отключается
+без падения приложения. На блоке 5.3 эта обёртка подменяется на LlamaIndex
+`QdrantVectorStore` без изменения интерфейса.
+
+```bash
+# Поднять Qdrant (нужен .env — см. .env.example)
+docker compose up -d qdrant
+
+# Дашборд
+open http://localhost:6333/dashboard
+
+# Загрузить базу знаний (118 чанков, идемпотентно — повторный запуск без дублей)
+ENVIRONMENT=local uv run scripts/load_to_qdrant.py
+
+# cosine vs dot + 3 примера фильтров (match/range/must+must_not) → docs/vector_store.md
+ENVIRONMENT=local uv run scripts/qdrant_experiments.py
+```
+
+Детали, обоснование метрики и HNSW-параметров — [`docs/vector_store.md`](docs/vector_store.md).
+
 ## Инструменты (function calling)
 
 | Tool | Описание |
@@ -468,7 +494,10 @@ app/
     llm.py          # оркестрация LLM + tool calls
     notifier.py     # backend -> bot: POST /notify
     embeddings.py   # М5.1: embed_texts — батчинг, retry, диск-кеш
+    vector_store.py # М5.2: VectorStore — обёртка над AsyncQdrantClient
     security/       # input_validator, output_filter
+  deps/
+    providers.py    # FastAPI Depends: get_llm_service, get_vector_store, ...
   llm/client.py     # AsyncOpenAI-клиент
   prompts/          # Jinja2-шаблоны системного промпта
   tools/            # handlers и схемы для function calling
@@ -479,10 +508,17 @@ app/
     bot.py            # BotSettings
     moderation.py     # ModerationSettings
     embeddings.py     # EmbeddingsSettings (М5.1)
+    qdrant.py         # QdrantSettings (М5.2)
 
 modes/
   rest.py           # uvicorn-сервер
   bot.py            # aiogram polling + internal API + broadcast worker
+
+scripts/
+  estimate_embedding_cost.py  # М5.1: время индексации на реальном корпусе
+  embeddings_smoke.py         # М5.1: кеш + деградация score без E5-префиксов
+  load_to_qdrant.py           # М5.2: идемпотентная загрузка базы знаний
+  qdrant_experiments.py       # М5.2: cosine vs dot + 3 примера фильтров
 
 alembic/
   versions/
@@ -501,16 +537,19 @@ eval/
     throttle_proxy.py     # rate-limiting прокси
 
 tests/
-  unit/             # legacy unit-тесты + test_moderation.py + test_embeddings.py
+  unit/             # legacy unit-тесты + test_moderation.py + test_embeddings.py + test_vector_store.py
   chat/             # тесты репозиториев, сервиса, маршрутов, фидбека, модерации
   admin/            # тесты /chats/admin/* (auth без БД + testcontainers Postgres)
   bot/              # тесты FSM, BackendClient, admin-команд, feedback, broadcast
+  integration/
+    test_vector_store_live.py  # М5.2: живой smoke-тест через testcontainers.qdrant
   eval/
     mini_benchmark.json  # М5.1: 5-10 пар (query, relevant, irrelevant)
   conftest.py
 
 docs/
   chat.md           # архитектура чат-модуля
-  architecture.md
+  architecture.md   # ADR-001..003 (взаимодействие, fault tolerance, embedding-модель)
+  vector_store.md   # М5.2: метрика cosine/dot, фильтры, HNSW
   security/         # garak-отчёты baseline и after
 ```

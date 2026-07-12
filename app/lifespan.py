@@ -7,8 +7,10 @@ from contextlib import asynccontextmanager
 import redis.asyncio as aioredis
 from fastapi import FastAPI
 from openai import AsyncOpenAI
+from qdrant_client import AsyncQdrantClient
 
 from app.observability.tracing import setup_tracing
+from app.services.vector_store import VectorStore
 from app.settings import settings
 from app.settings.logging import setup_logging
 
@@ -53,6 +55,20 @@ async def lifespan(app: FastAPI):
         app.state.pg_engine = None
         app.state.pg_session_factory = None
 
+    app.state.qdrant_client = AsyncQdrantClient(
+        url=settings.qdrant.url,
+        api_key=settings.qdrant.api_key or None,
+    )
+    app.state.vector_store = VectorStore(
+        app.state.qdrant_client, settings.qdrant.collection, settings.embeddings.dim
+    )
+    try:
+        await app.state.vector_store.ensure_collection()
+        logger.info("Qdrant collection ready: %s", settings.qdrant.collection)
+    except Exception:
+        logger.warning("Qdrant unavailable — vector search disabled")
+        app.state.vector_store = None
+
     yield
 
     await app.state.openai.close()
@@ -60,3 +76,4 @@ async def lifespan(app: FastAPI):
         await app.state.cache.aclose()
     if app.state.pg_engine:
         await app.state.pg_engine.dispose()
+    await app.state.qdrant_client.close()

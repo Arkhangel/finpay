@@ -13,6 +13,7 @@ from fastapi import Depends, Request
 from openai import AsyncOpenAI
 
 from app.services.llm import LLMService
+from app.services.vector_store import VectorStore
 from app.settings import settings
 
 
@@ -22,6 +23,10 @@ def get_openai(request: Request) -> AsyncOpenAI:
 
 def get_cache(request: Request) -> aioredis.Redis | None:
     return request.app.state.cache
+
+
+def get_vector_store(request: Request) -> VectorStore | None:
+    return request.app.state.vector_store
 
 
 def get_canary(request: Request) -> str:
@@ -38,3 +43,4 @@ def get_llm_service(
 LLMServiceDep = Annotated[LLMService, Depends(get_llm_service)]
 CacheDep = Annotated[aioredis.Redis | None, Depends(get_cache)]
 CanaryDep = Annotated[str, Depends(get_canary)]
+VectorStoreDep = Annotated[VectorStore | None, Depends(get_vector_store)]

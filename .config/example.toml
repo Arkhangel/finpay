@@ -20,6 +20,12 @@ model = "intfloat/multilingual-e5-base"  # self-hosted, скачивается �
 device = "cpu"
 batch_size = 32                          # 16-32 рекомендуется для sentence-transformers на CPU
 cache_dir = ".cache/embeddings"
+dim = 768                                # размерность вектора intfloat/multilingual-e5-base
+
+[qdrant]
+url = "http://localhost:6333"
+api_key = ""                             # секрет Qdrant REST/gRPC API, задавать через QDRANT__API_KEY
+collection = "documents"
 
 [redis]
 url = "redis://localhost:6379"

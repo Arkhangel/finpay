@@ -8,3 +8,4 @@ class EmbeddingsSettings(BaseModel):
     device: str = "cpu"
     batch_size: int = 32
     cache_dir: Path = Path(".cache/embeddings")
+    dim: int = 768
