@@ -109,6 +109,8 @@ bare-metal-версии реально сломал контекст на син
 `RAGBaremetalService.answer()` (bare-metal) на реальном Qdrant
 (`docker compose up -d qdrant`) и реальном LLM (Groq `llama-3.1-8b-instant`).
 
+Состав выборки: **3 хороших / 1 средний / 1 вне базы**.
+
 ### 1. «Какая стандартная комиссия за транзакцию?» — хороший
 
 - **LlamaIndex:** «1.8% от суммы транзакции.» — top-1 `02_tariffs.md`, score 0.828.
