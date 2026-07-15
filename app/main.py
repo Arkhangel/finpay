@@ -9,6 +9,8 @@
          -d '{"messages":[{"role":"user","content":"hi"}]}'
     curl -N -X POST localhost:8000/chat/stream -H 'Content-Type: application/json' \
          -d '{"messages":[{"role":"user","content":"считай до пяти"}]}'
+    curl -X POST localhost:8000/rag/query -H 'Content-Type: application/json' \
+         -d '{"question":"Какая стандартная комиссия за транзакцию?"}'
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ from app.exceptions.handlers import setup_exception_handlers
 from app.lifespan import lifespan
 from app.admin import routes as admin_routes
 from app.chat import routes as chat_domain
-from app.routers import chat, health, models
+from app.routers import chat, health, models, rag
 from app.settings import settings
 from app.settings.logging import request_id_var
 
@@ -71,6 +73,7 @@ def create_app() -> FastAPI:
     app.include_router(chat.router)
     app.include_router(health.router)
     app.include_router(models.router)
+    app.include_router(rag.router)
     app.include_router(chat_domain.router)
     app.include_router(admin_routes.router)
 

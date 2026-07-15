@@ -27,6 +27,15 @@ url = "http://localhost:6333"
 api_key = ""                             # секрет Qdrant REST/gRPC API, задавать через QDRANT__API_KEY
 collection = "documents"
 
+[rag]
+corpus_dir = "data/rag-block-03"        # 10 документов домена FinPay (М5.3)
+collection = "rag_block_03"              # отдельная от "documents" коллекция — LlamaIndex хранит ноды в своём формате
+collection_baremetal = "rag_block_03_baremetal"
+chunk_size = 512
+chunk_overlap = 64
+similarity_top_k = 3
+score_threshold = 0.75                   # ниже — честный fallback "не знаю", а не выдумывание ответа
+
 [redis]
 url = "redis://localhost:6379"
 password = ""

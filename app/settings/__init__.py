@@ -13,6 +13,7 @@ from app.settings.embeddings import EmbeddingsSettings
 from app.settings.moderation import ModerationSettings
 from app.settings.openai import OpenAISettings
 from app.settings.qdrant import QdrantSettings
+from app.settings.rag import RagSettings
 from app.settings.redis import RedisSettings
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ class Settings(BaseSettings):
     openai: OpenAISettings = OpenAISettings()
     embeddings: EmbeddingsSettings = EmbeddingsSettings()
     qdrant: QdrantSettings = QdrantSettings()
+    rag: RagSettings = RagSettings()
     redis: RedisSettings = RedisSettings()
     chat: ChatSettings = ChatSettings()
     bot: BotSettings = BotSettings()

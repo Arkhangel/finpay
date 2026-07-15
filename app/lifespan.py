@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 from contextlib import asynccontextmanager
@@ -10,6 +11,7 @@ from openai import AsyncOpenAI
 from qdrant_client import AsyncQdrantClient
 
 from app.observability.tracing import setup_tracing
+from app.services.rag import RAGService
 from app.services.vector_store import VectorStore
 from app.settings import settings
 from app.settings.logging import setup_logging
@@ -69,6 +71,16 @@ async def lifespan(app: FastAPI):
         logger.warning("Qdrant unavailable — vector search disabled")
         app.state.vector_store = None
 
+    # RAG-индекс (М5.3) строится один раз на старте, не на каждый запрос.
+    rag_service = RAGService()
+    try:
+        await asyncio.to_thread(rag_service.build)
+        app.state.rag_service = rag_service
+        logger.info("RAG index ready: %s", settings.rag.collection)
+    except Exception:
+        logger.warning("RAG index unavailable — /rag/query disabled")
+        app.state.rag_service = None
+
     yield
 
     await app.state.openai.close()
@@ -76,4 +88,6 @@ async def lifespan(app: FastAPI):
         await app.state.cache.aclose()
     if app.state.pg_engine:
         await app.state.pg_engine.dispose()
+    if app.state.rag_service:
+        await app.state.rag_service.aclose()
     await app.state.qdrant_client.close()
