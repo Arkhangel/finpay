@@ -1,0 +1,114 @@
+[
+  {
+    "question": "Какая комиссия действует по СБП?",
+    "relevant_doc_ids": ["02_tariffs.md"]
+  },
+  {
+    "question": "Какой тариф действует по умолчанию для новых аккаунтов и какая у него ставка?",
+    "relevant_doc_ids": ["02_tariffs.md"]
+  },
+  {
+    "question": "Что происходит при недоступности webhook-эндпоинта — сколько раз и с какими интервалами FinPay повторяет доставку?",
+    "relevant_doc_ids": ["06_webhooks.md"]
+  },
+  {
+    "question": "Каким способом продавец может проверить подлинность входящего вебхука от FinPay?",
+    "relevant_doc_ids": ["06_webhooks.md"]
+  },
+  {
+    "question": "В течение какого срока можно оформить возврат платежа?",
+    "relevant_doc_ids": ["05_refunds.md"]
+  },
+  {
+    "question": "Каким запросом API оформляется возврат и какие параметры обязательны?",
+    "relevant_doc_ids": ["05_refunds.md"]
+  },
+  {
+    "question": "Какой максимальный размер одной транзакции в боевом режиме?",
+    "relevant_doc_ids": ["03_limits.md"]
+  },
+  {
+    "question": "Какой лимит на одну транзакцию действует в тестовом режиме?",
+    "relevant_doc_ids": ["03_limits.md"]
+  },
+  {
+    "question": "Сколько обычно длится статус processing и когда это уже считается нештатной ситуацией?",
+    "relevant_doc_ids": ["04_transaction_statuses.md"]
+  },
+  {
+    "question": "В каком поле ответа API можно узнать причину отказа платежа со статусом failed?",
+    "relevant_doc_ids": ["04_transaction_statuses.md"]
+  },
+  {
+    "question": "Какие платёжные системы поддерживает FinPay для карточных платежей?",
+    "relevant_doc_ids": ["01_payment_methods.md"]
+  },
+  {
+    "question": "Можно ли провести карточный платёж без прохождения 3-D Secure?",
+    "relevant_doc_ids": ["01_payment_methods.md"]
+  },
+  {
+    "question": "Что означает код ошибки API 429 и как его нужно обрабатывать?",
+    "relevant_doc_ids": ["07_api_errors.md"]
+  },
+  {
+    "question": "Куда обращаться по вопросам интеграции и API и в какой срок отвечает поддержка?",
+    "relevant_doc_ids": ["07_api_errors.md"]
+  },
+  {
+    "question": "Хранит ли FinPay полный номер карты и CVV на своей стороне?",
+    "relevant_doc_ids": ["08_security_pci.docx"]
+  },
+  {
+    "question": "Какого уровня PCI DSS сертифицирован FinPay?",
+    "relevant_doc_ids": ["08_security_pci.docx"]
+  },
+  {
+    "question": "Какие два вида API-ключей выдаются продавцу после верификации бизнеса?",
+    "relevant_doc_ids": ["09_integration_guide.pdf"]
+  },
+  {
+    "question": "Почему нельзя определять итоговый результат оплаты только по возврату клиента на return_url?",
+    "relevant_doc_ids": ["09_integration_guide.pdf"]
+  },
+  {
+    "question": "Компенсируются ли обеды сотрудникам, которые работают удалённо?",
+    "relevant_doc_ids": ["10_off_topic_office_policy.md"]
+  },
+  {
+    "question": "Сколько составляет компенсация обеда сотруднику очного офиса за рабочий день?",
+    "relevant_doc_ids": ["10_off_topic_office_policy.md"]
+  },
+  {
+    "question": "Чем отличается ошибка 401 от ошибки 402?",
+    "relevant_doc_ids": ["07_api_errors.md"]
+  },
+  {
+    "question": "Что дешевле для продавца — комиссия по картам или по СБП, и насколько?",
+    "relevant_doc_ids": ["02_tariffs.md"]
+  },
+  {
+    "question": "Зависят ли лимиты на транзакции от того, какой тариф — стандартный или корпоративный — применяется к аккаунту?",
+    "relevant_doc_ids": ["03_limits.md"]
+  },
+  {
+    "question": "Чем лимит на одну транзакцию в тестовом режиме отличается от лимита в боевом режиме?",
+    "relevant_doc_ids": ["03_limits.md", "09_integration_guide.pdf"]
+  },
+  {
+    "question": "Что делать при ошибке 429 и сколько попыток повтора доставки у вебхуков при недоступности endpoint?",
+    "relevant_doc_ids": ["07_api_errors.md", "06_webhooks.md"]
+  },
+  {
+    "question": "Как правильно определять итоговый результат оплаты, если браузер клиента закрылся до возврата на return_url, и чем в этом может помочь проверка статуса транзакции по API?",
+    "relevant_doc_ids": ["09_integration_guide.pdf", "04_transaction_statuses.md"]
+  },
+  {
+    "question": "Нужно ли продавцу, интегрированному через готовый виджет оплаты FinPay, проходить собственную сертификацию PCI DSS?",
+    "relevant_doc_ids": ["08_security_pci.docx", "01_payment_methods.md"]
+  },
+  {
+    "question": "Меняется ли комиссия аккаунта при повышении суточного лимита операций или при переходе на корпоративный тариф?",
+    "relevant_doc_ids": ["02_tariffs.md", "03_limits.md"]
+  }
+]
