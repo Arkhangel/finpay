@@ -5,6 +5,16 @@ class RagSettings(BaseModel):
     corpus_dir: str = "data/rag-block-03"
     collection: str = "rag_block_03"
     collection_baremetal: str = "rag_block_03_baremetal"
+
+    # Блок 5.5: полный корпоративный корпус (data/<category>/...) в отдельной
+    # коллекции — rag_block_03 остаётся историческим корпусом Б5.3/Б5.4
+    # (10 документов, docs/chunking_experiment.md), смешивать их некорректно.
+    kb_collection: str = "finpay_kb"
+    # SimpleDocumentStore, персистится между запусками scripts/ingest.py —
+    # без этого DocstoreStrategy.UPSERTS не смог бы определить "changed"/
+    # "unchanged" на повторном запуске (сравнение идёт по хешу документа,
+    # хранящемуся в docstore с предыдущего запуска).
+    docstore_path: str = "storage/docstore_kb.json"
     # Используются fixed_size/recursive в app/services/chunking.py — semantic
     # (победившая стратегия, см. ниже) от них не зависит.
     chunk_size: int = 512
@@ -27,12 +37,15 @@ class RagSettings(BaseModel):
 
     # BAAI/bge-reranker-v2-m3 (app/services/reranker.py) поднимает MRR@10
     # semantic-стратегии с 0.917 до 1.000, но на CPU в ~28 раз медленнее
-    # (~30ms → ~970ms на вопрос, см. docs/chunking_experiment.md) — на
-    # текущем маленьком корпусе выигрыш не окупает задержку, поэтому по
-    # умолчанию выключен; включать явно, если корпус вырастет и Hit
-    # Rate@5/MRR начнут проседать без него.
-    reranker_enabled: bool = False
+    # (~30ms → ~970ms на вопрос, см. docs/chunking_experiment.md). На корпусе
+    # из 10 документов Б5.4 выигрыш не окупал задержку, поэтому был выключен.
+    # Блок 5.5 поднимает корпус до 50+ документов из многих категорий —
+    # retrieval на таком объёме грубее, и re-ranking включён по умолчанию.
+    reranker_enabled: bool = True
     reranker_candidate_k: int = 20
+    # top_n после re-ranking для kb-пайплайна (Б5.5) — retrieval отдаёт
+    # top_k=10 (similarity_top_k выше), re-ranker сужает до top_n=5.
+    rerank_top_n: int = 5
 
     # Ниже этого score top-1 результата ответ считается "не найдено" (fallback).
     score_threshold: float = 0.75

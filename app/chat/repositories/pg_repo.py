@@ -94,11 +94,20 @@ class PostgresChatRepository:
         await self._session.commit()
 
     async def save_feedback(
-        self, message_id: UUID, owner_external_id: str, value: str
+        self,
+        message_id: UUID,
+        owner_external_id: str,
+        value: str,
+        sources: list[dict] | None = None,
     ) -> bool:
         stmt = (
             pg_insert(MessageFeedbackRow)
-            .values(message_id=message_id, owner_external_id=owner_external_id, value=value)
+            .values(
+                message_id=message_id,
+                owner_external_id=owner_external_id,
+                value=value,
+                sources=sources,
+            )
             .on_conflict_do_nothing(constraint="uq_message_feedback_owner_message")
         )
         result = await self._session.execute(stmt)

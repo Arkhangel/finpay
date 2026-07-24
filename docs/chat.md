@@ -8,12 +8,44 @@ graph TD
     routes --> ChatService["ChatService\napp/chat/service.py"]
     ChatService --> ChatRepository["ChatRepository\n(Protocol)"]
     ChatService --> llm_client["AsyncOpenAI\n(LLM)"]
+    ChatService -->|retrieve| RAGService["RAGService.retrieve()\napp/services/rag.py"]
     ChatRepository -->|json| JsonRepo["JsonChatRepository\nфайлы: var/chats/"]
     ChatRepository -->|postgres| PgRepo["PostgresChatRepository\nasync SQLAlchemy 2.x"]
     JsonRepo --> FS[(Файловая система)]
     PgRepo --> PG[(PostgreSQL)]
     llm_client --> Groq["Groq / OpenAI API"]
+    RAGService --> Qdrant[(Qdrant\nfinpay_kb)]
 ```
+
+## RAG в чате (блок 5.5)
+
+`ChatService.send_message` на каждый ход (если подключён `RAGService`,
+`app.state.rag_service is not None`) дополнительно:
+
+1. Переписывает follow-up в самостоятельный вопрос для retrieval
+   (`_condense_query`, включается `chat.rag_condense_enabled`, по умолчанию
+   `true`) — генерации это не касается, туда история уходит целиком.
+2. Вызывает `RAGService.retrieve()` — retrieval → опциональный re-ranking →
+   score-guard.
+3. Если `top_score` ниже `rag.score_threshold` — генерация вообще не
+   запускается, в чат уходит фиксированный ответ `"По базе не нашёл, могу
+   эскалировать."` (код-гард, как и в `/rag/query`).
+4. Если уверенно — в сообщения перед последним (текущим) вопросом
+   добавляется системный блок с пронумерованным контекстом `[1]`, `[2]` и
+   инструкцией цитировать; дальше — обычная генерация и стриминг.
+
+Источники всегда прокидываются наружу в `result["sources"]` (даже при
+отказе — видно, что было найдено, но не прошло порог), и SSE-стрим
+дополняется финальным именованным событием:
+
+```
+event: sources
+data: {"sources": [{"id":1,"file_name":"05_refunds.md","page":1,"score":0.9,"snippet":"..."}]}
+```
+
+Если `RAGService` не подключён (например, `scripts/ingest.py` ещё не
+запускался и коллекция `finpay_kb` не существует), `event: sources` просто
+не отправляется — остальной чат работает как раньше, без RAG.
 
 ## Стратегия контекста
 
@@ -63,8 +95,14 @@ curl -N -X POST http://localhost:8000/chats/<chat_id>/messages \
 # data: {"type":"token","delta":"Привет"}
 # data: {"type":"token","delta":", Аня"}
 # ...
+# event: sources
+# data: {"sources":[...]}          ← только если подключён RAGService
 # data: {"type":"done","message_id":"<uuid ассистентского сообщения>"}
 ```
+
+`\n` внутри `delta` не ломает формат SSE: `json.dumps` экранирует его как
+два символа `\n` в JSON-строке, сырой перевод строки никогда не попадает в
+`data:`-строку целиком (см. `app/chat/routes.py::generator`).
 
 `message_id` из `done` используется, например, ботом для клавиатуры фидбека
 👍/👎 (`POST /messages/{message_id}/feedback`, см. ниже).
@@ -109,6 +147,34 @@ curl -X POST http://localhost:8000/chats/<chat_id>/system-message \
   -d '{"text": "Ваша заявка #123 обработана", "notify": true}'
 ```
 
+## Telegram-бот: стриминг ответа (отклонение от Б5.5-задания)
+
+Задание Б5.5 описывает стриминг в Telegram через `editMessageText` с ручным
+дросселированием (`last_edit_at` per `chat_id`, ≥700–1000мс между вызовами,
+чтобы не упереться в лимит Telegram ~1 edit/сек на сообщение → `429 Too Many
+Requests`).
+
+В проекте эта механика уже была реализована иначе — через нативный
+`sendMessageDraft` (Bot API 10.0, `app/bot/services/streaming.py::stream_to_chat`):
+Telegram сам буферизует черновик на своей стороне и не считает вызовы
+`sendMessageDraft` per-message rate-limit'ом `editMessageText`, поэтому
+проблема 429 не возникает в принципе, и вручную реализованный debounce не
+нужен — `stream_to_chat` вызывает `send_message_draft` на каждый чанк без
+троттлинга. Итоговое сообщение отправляется один раз, обычным
+`send_message`, после чего на него вешается клавиатура фидбека.
+
+Осознанно оставлено как есть: `editMessageText`+debounce и
+`sendMessageDraft` решают одну и ту же задачу (плавный вывод ответа по
+токенам), но `sendMessageDraft` — более новый и надёжный механизм именно
+потому, что убирает источник 429 полностью, а не смягчает его частотой
+вызовов. Бот отвечает через RAG-контур (`POST /chats/{id}/messages`,
+`app/bot/handlers/text.py`) так же, как и REST-клиенты; после стрима боту
+приходит `result["sources"]` (см. `app/bot/services/backend_client.py`) —
+источники кэшируются по `message_id` в `app/bot/services/sources_cache.py`
+(callback-кнопки Telegram ограничены ~64 байтами и не могут нести список
+источников внутри себя) и прикладываются к `POST .../feedback` при нажатии
+👍/👎.
+
 ## Обратный канал backend → bot (`/notify`)
 
 Бот поднимает внутренний FastAPI рядом с polling (`app/bot/web.py`,
@@ -133,10 +199,14 @@ curl -X POST http://localhost:9000/notify \
 из тела запроса; повторный голос того же пользователя по тому же сообщению
 не создаёт вторую запись (`recorded: false`).
 
+`sources` (блок 5.5, опционально) — список источников, показанных вместе с
+оценённым ответом; сохраняется как есть для аудита ("какой ответ с какими
+source получил дизлайк"), в дедупликации не участвует.
+
 ```bash
 curl -X POST http://localhost:8000/chats/<chat_id>/messages/<message_id>/feedback \
   -H 'Content-Type: application/json' \
-  -d '{"value": "up"}'
+  -d '{"value": "up", "sources": [{"id": 1, "file_name": "05_refunds.md", "page": 1, "score": 0.9, "snippet": "..."}]}'
 ```
 
 ### Admin API
@@ -225,6 +295,7 @@ CREATE TABLE message_feedback (
     message_id UUID NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
     owner_external_id TEXT NOT NULL,
     value TEXT NOT NULL,    -- "up" | "down"
+    sources JSONB,          -- Б5.5: источники, показанные вместе с ответом (nullable)
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (owner_external_id, message_id)
 );

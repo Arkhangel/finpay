@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>SDK для интеграции с FinPay</title></head>
+<body>
+<section id="overview">
+<h1>SDK для интеграции с FinPay</h1>
+<h2>Официальные SDK</h2>
+<p>FinPay поддерживает официальные SDK для двух языков: Python
+(<code>pip install finpay-sdk</code>) и Node.js
+(<code>npm install @finpay/sdk</code>). Оба SDK покрывают полный набор
+операций v2 API: платежи, возвраты, выплаты, вебхуки, работу с
+подписками.</p>
+</section>
+<section id="client-init">
+<h2>Инициализация клиента (Python)</h2>
+<p>Клиент создаётся с обязательным параметром <code>api_key</code> и
+опциональным <code>timeout</code> (по умолчанию 30 секунд). SDK
+автоматически подставляет заголовок <code>Idempotency-Key</code> для
+методов создания платежа, если он не передан явно — на основе UUID v4,
+сгенерированного один раз при вызове метода.</p>
+</section>
+<section id="errors">
+<h2>Обработка ошибок</h2>
+<p>SDK выбрасывает типизированные исключения: <code>FinPayAuthError</code>
+(401), <code>FinPayValidationError</code> (422),
+<code>FinPayRateLimitError</code> (429, содержит атрибут
+<code>retry_after</code>), <code>FinPayServerError</code> (5xx). Это
+избавляет интеграцию от разбора кодов ответа вручную.</p>
+</section>
+<section id="retry">
+<h2>Встроенный retry</h2>
+<p>Обе SDK по умолчанию делают до 3 повторных попыток при ошибках 429 и 5xx
+с экспоненциальной задержкой (1с, 2с, 4с). Поведение можно отключить
+параметром <code>retry=False</code> при создании клиента, если интеграция
+реализует собственную логику повторов.</p>
+</section>
+<section id="unofficial">
+<h2>Неофициальные SDK</h2>
+<ul>
+  <li>PHP — сторонний пакет <code>finpay-php</code> на Packagist,
+  поддерживается сообществом, не покрывает выплаты (payouts).</li>
+  <li>Go — сторонний пакет, покрывает только приём платежей, без вебхуков
+  и подписок.</li>
+</ul>
+<p>FinPay не гарантирует SLA поддержки для неофициальных SDK.</p>
+</section>
+</body>
+</html>

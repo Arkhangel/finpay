@@ -304,3 +304,157 @@ def test_submit_feedback_unknown_chat_returns_404(client):
         f"/chats/{uuid4()}/messages/{uuid4()}/feedback", json={"value": "up"}
     )
     assert resp.status_code == 404
+
+
+# ── RAG в чате: retrieval, score-guard, event: sources (Б5.5) ──────────────────
+
+def _fake_llm_stream_or_completion(deltas: list[str], completion_content: str = "condensed") -> MagicMock:
+    """Различает стриминговый (генерация) и обычный (condense) вызовы по stream=..."""
+    llm = MagicMock()
+
+    async def fake_create(**kwargs):
+        fake_create.last_kwargs = kwargs
+        if kwargs.get("stream"):
+            return _FakeStream(deltas)
+        completion = MagicMock()
+        completion.choices = [MagicMock(message=MagicMock(content=completion_content))]
+        return completion
+
+    llm.chat.completions.create = fake_create
+    return llm
+
+
+def _fake_rag(retrieval: dict) -> MagicMock:
+    rag = MagicMock()
+
+    async def fake_retrieve(question):
+        fake_retrieve.last_question = question
+        return retrieval
+
+    rag.retrieve = fake_retrieve
+    return rag
+
+
+def _node(text: str, score: float, **metadata):
+    from llama_index.core.schema import NodeWithScore, TextNode
+
+    return NodeWithScore(node=TextNode(text=text, metadata=metadata), score=score)
+
+
+def _extract_sources_event(body: str) -> dict | None:
+    marker = "event: sources\ndata: "
+    idx = body.find(marker)
+    if idx == -1:
+        return None
+    start = idx + len(marker)
+    end = body.index("\n\n", start)
+    return json.loads(body[start:end])
+
+
+def _client_with_rag(tmp_path, llm, rag):
+    from app.main import create_app
+    from app.chat.deps import get_chat_service
+    from app.chat.service import ChatService
+    from app.chat.repositories.json_repo import JsonChatRepository
+
+    repo = JsonChatRepository(base_dir=tmp_path)
+    svc = ChatService(repository=repo, llm_client=llm, rag_service=rag)
+
+    with patch("app.main.lifespan", _noop_lifespan):
+        app = create_app()
+
+    app.dependency_overrides[get_chat_service] = lambda: svc
+    return TestClient(app)
+
+
+def test_send_message_rag_confident_injects_context_and_emits_sources(tmp_path):
+    nodes = [_node("Возврат оформляется в течение 30 дней.", 0.9, source="05_refunds.md", page=1)]
+    retrieval = {
+        "nodes": nodes,
+        "sources": [
+            {"id": 1, "file_name": "05_refunds.md", "page": 1, "score": 0.9, "snippet": "Возврат — 30 дней."}
+        ],
+        "top_score": 0.9,
+        "confident": True,
+    }
+    llm = _fake_llm_stream_or_completion(["Возврат ", "— 30 дней [1]."])
+    rag = _fake_rag(retrieval)
+
+    with _client_with_rag(tmp_path, llm, rag) as client:
+        chat_id = client.post(
+            "/chats", json={"owner_external_id": "user-1", "interface": "cli"}
+        ).json()["chat_id"]
+
+        resp = client.post(
+            f"/chats/{chat_id}/messages", data={"content": "Каков срок возврата?"}
+        )
+
+        assert resp.status_code == 200
+        sent_messages = llm.chat.completions.create.last_kwargs["messages"]
+        system_messages = [m["content"] for m in sent_messages if m["role"] == "system"]
+        assert any("[1] (05_refunds.md)" in content for content in system_messages)
+
+        sources_event = _extract_sources_event(resp.text)
+        assert sources_event == {"sources": retrieval["sources"]}
+
+        history = client.get(f"/chats/{chat_id}/messages").json()
+        assistant_msg = [m for m in history if m["role"] == "assistant"][-1]
+        assert assistant_msg["content"] == "Возврат — 30 дней [1]."
+
+
+def test_send_message_rag_score_guard_skips_llm_and_returns_refusal(tmp_path):
+    from app.services.rag import REFUSAL_ANSWER
+
+    retrieval = {"nodes": [], "sources": [], "top_score": 0.1, "confident": False}
+    llm = _fake_llm_stream_or_completion(["не должно вызваться"])
+    rag = _fake_rag(retrieval)
+
+    with _client_with_rag(tmp_path, llm, rag) as client:
+        chat_id = client.post(
+            "/chats", json={"owner_external_id": "user-1", "interface": "cli"}
+        ).json()["chat_id"]
+
+        resp = client.post(
+            f"/chats/{chat_id}/messages", data={"content": "какой рецепт борща?"}
+        )
+
+        assert resp.status_code == 200
+        assert not hasattr(llm.chat.completions.create, "last_kwargs")
+
+        events = _parse_sse_events(resp.text)
+        assert {"type": "token", "delta": REFUSAL_ANSWER} in events
+
+        history = client.get(f"/chats/{chat_id}/messages").json()
+        assistant_msg = [m for m in history if m["role"] == "assistant"][-1]
+        assert assistant_msg["content"] == REFUSAL_ANSWER
+
+        sources_event = _extract_sources_event(resp.text)
+        assert sources_event == {"sources": []}
+
+
+def test_send_message_without_rag_service_omits_sources_event(tmp_path):
+    llm = _fake_llm(["ok"])
+    with _client_with_llm(tmp_path, llm) as client:
+        chat_id = client.post(
+            "/chats", json={"owner_external_id": "user-1", "interface": "cli"}
+        ).json()["chat_id"]
+
+        resp = client.post(f"/chats/{chat_id}/messages", data={"content": "привет"})
+
+        assert "event: sources" not in resp.text
+
+
+def test_send_message_rag_condense_rewrites_followup_for_retrieval(tmp_path):
+    retrieval = {"nodes": [], "sources": [], "top_score": 0.9, "confident": True}
+    llm = _fake_llm_stream_or_completion(["ответ"], completion_content="самостоятельный вопрос про электронику")
+    rag = _fake_rag(retrieval)
+
+    with _client_with_rag(tmp_path, llm, rag) as client:
+        chat_id = client.post(
+            "/chats", json={"owner_external_id": "user-1", "interface": "cli"}
+        ).json()["chat_id"]
+
+        client.post(f"/chats/{chat_id}/messages", data={"content": "Каков срок возврата?"})
+        client.post(f"/chats/{chat_id}/messages", data={"content": "А для электроники?"})
+
+        assert rag.retrieve.last_question == "самостоятельный вопрос про электронику"

@@ -170,3 +170,130 @@ bare-metal-версии реально сломал контекст на син
   score — граница `score_threshold = 0.75` в `app/settings/rag.py` для
   продакшена стоит либо поднять, либо дополнить эту эвристику явной
   проверкой домена вопроса.
+
+Ниже — как эта хрупкость решается в Б5.5 включением re-ranking.
+
+## Блок 5.5 — корпоративная сборка
+
+Продолжение того же сервиса (`app/services/rag.py`, `/rag/query`), теперь
+поверх полного корпоративного корпуса (`data/<category>/...`, 50+ документов,
+4 формата — см. `docs/data_inventory.md`) и с полным query-пайплайном:
+re-ranking, нумерованные цитаты, код-гард до вызова LLM, подключение к
+multi-turn чату (М4) и к Telegram-боту.
+
+### Архитектура: два контура
+
+```mermaid
+graph TD
+    subgraph ing["Ingestion — scripts/ingest.py"]
+        files["data/&lt;category&gt;/*.{md,pdf,docx,html}"] --> readers["Readers по расширению:\nPyMuPDFReader / DocxReader /\nHTMLTagReader / MarkdownReader"]
+        readers --> meta["Metadata-обогащение\napp/services/ingestion.py\nsource, category, version, author, page"]
+        meta --> splitter["SemanticSplitterNodeParser\n(chunking_strategy=semantic, Б5.4)"]
+        splitter --> embed["HuggingFaceEmbedding\nintfloat/multilingual-e5-base"]
+        embed --> pipeline["IngestionPipeline\nSimpleDocumentStore + DocstoreStrategy.UPSERTS"]
+        pipeline --> qdrant[("Qdrant\nfinpay_kb")]
+    end
+
+    subgraph qry["Query — app/services/rag.py + app/chat/service.py"]
+        question["Вопрос\n(/rag/query или /chats/{id}/messages)"] --> condense["Condense (опционально, только в чате)\nfollow-up → самостоятельный вопрос"]
+        condense --> retrieve["retrieve(): top_k=10"]
+        retrieve --> qdrant
+        retrieve --> rerank["Reranker\nBAAI/bge-reranker-v2-m3, top_n=5"]
+        rerank --> guard{"top_score ≥\nscore_threshold?"}
+        guard -->|нет| refusal["Код-гард — LLM не вызывается:\n«По базе не нашёл, могу эскалировать»"]
+        guard -->|да| generate["LLM: нумерованные цитаты [1], [2]"]
+        generate --> sources["sources: id/file_name/page/score/snippet"]
+    end
+```
+
+### Ingestion: мультиформатный, инкрементальный
+
+`scripts/ingest.py data/` читает каждый файл специализированным ридером по
+расширению (все 4 формата из задания подключены — PDF/DOCX/HTML/MD),
+обогащает метаданными (`app/services/ingestion.py`: `source`, `category` из
+пути, `version` из имени файла, `author` из DOCX core properties,
+`last_modified` из stat; шумные поля исключены из эмбеддинга через
+`excluded_embed_metadata_keys`) и проводит через `IngestionPipeline` с
+`SimpleDocumentStore` + `DocstoreStrategy.UPSERTS`: докстор персистится в
+`settings.rag.docstore_path`, поэтому повторный прогон без изменений в
+файлах не дублирует чанки — `pipeline.run()` пропускает документы с
+совпадающим хешем (проверено: второй прогон на том же корпусе — «0 changed,
+N unchanged»). Файлы, которые не удалось распарсить (битый PDF, HTML без
+ожидаемого `<section>`), переименовываются в `<имя>.failed`, ошибка
+логируется, остальная индексация не блокируется.
+
+### Параметры chunking (наследие Б5.4)
+
+Продакшен-ingestion использует ту же стратегию, что победила в эксперименте
+блока 5.4 (`docs/chunking_experiment.md`, golden dataset из 28 вопросов):
+`chunking_strategy = "semantic"` (`SemanticSplitterNodeParser`,
+`buffer_size=1`, `breakpoint_percentile_threshold=95`) — граница чанка
+проходит по семантическому разрыву соседних предложений, а не по фиксированному
+числу токенов. Baseline на случай, если бы Б5.4 был пропущен, — `chunk_size=512`,
+`chunk_overlap=64` (fixed/recursive из `app/services/chunking.py`); эти же
+значения остаются дефолтом настроек (`app/settings/rag.py`) на случай смены
+стратегии.
+
+### Re-ranker: включён в Б5.5
+
+`BAAI/bge-reranker-v2-m3` (`app/services/reranker.py`, `CrossEncoder`) в
+Б5.4 был отключён по умолчанию — корпус из 10 документов уже насыщал
+retrieval на top-10, а re-ranking на CPU медленнее в ~28 раз (см. раздел
+выше). В Б5.5 корпус вырос до 50+ документов из 10 категорий: грубый
+cosine-retrieval на таком объёме отдаёт заметно более шумный top-10, и
+re-ranking включён по умолчанию (`reranker_enabled = True`) — `retrieve()`
+берёт `similarity_top_k=10` кандидатов и сужает до `rerank_top_n=5`.
+
+Проверка на реальной модели (три пары запрос/фрагмент):
+
+| Запрос | Фрагмент | Reranker score |
+|---|---|---|
+| «Какая комиссия за транзакцию?» | «Комиссия FinPay 1.8% от суммы» | 0.874 |
+| «Какая комиссия за транзакцию?» | «Рецепт борща: свёкла, капуста…» | 0.000016 |
+| «Сколько дней на возврат?» | «Возврат — 30 дней с момента транзакции» | 0.980 |
+
+`CrossEncoder.predict()` для этой модели уже возвращает сигмоид-нормализованный
+score в диапазоне 0–1 (не сырые логиты) — релевантные пары кучкуются в
+0.87–0.98, нерелевантная падает практически до нуля. Разделение заметно
+резче, чем у сырого cosine similarity retrieval (см. пример с борщом выше в
+разделе Б5.3/5.4, где нерелевантный документ получил cosine score 0.766–0.773
+— выше порога 0.75).
+
+### Threshold для отказа: 0.75, но теперь после re-ranking
+
+`score_threshold = 0.75` не менялся с Б5.3/5.4, но с включённым re-ranker'ом
+код-гард в `RAGService.retrieve()` теперь сравнивает с порогом **score после
+re-ranking** (0–1, см. таблицу выше), а не сырой cosine similarity
+(HuggingFace e5-base, тоже 0–1, но с гораздо более узким разделением между
+релевантным и нерелевантным — 0.75–0.91 против случайных 0.75–0.78). Это
+не косметическая деталь: именно она чинит зафиксированную в разделе Б5.3/5.4
+проблему — вопрос про борщ раньше проходил порог по чистому cosine similarity
+(0.766 > 0.75, ложноположительно, fallback сработал только за счёт того, что
+LLM сама заметила нерелевантность контекста), а после re-ranking тот же
+случай получает score ~0.00002 и надёжно отсекается тем же числовым порогом
+без необходимости полагаться на LLM. Обоснование останется актуальным и
+дальше: при переходе на другую embedding/reranker-модель распределение
+скоров нужно перекалибровать заново (ориентир — golden dataset из Б5.4/Б5.6).
+
+### Multi-turn (М4) и score-guard в чате
+
+RAG подключён к `ChatService.send_message` (`app/chat/service.py`) —
+подробности и диаграмма см. `docs/chat.md`, раздел «RAG в чате». Кратко:
+опциональный condense-шаг чинит retrieval для follow-up вопросов
+(`chat.rag_condense_enabled`, по умолчанию включён), код-гард работает
+идентично `/rag/query` (генерация не запускается при низком score), источники
+уходят клиенту финальным SSE-событием `event: sources`.
+
+### Endpoints
+
+| Endpoint | Назначение |
+|---|---|
+| `POST /rag/query` | Одношаговый ответ (синхронно), с цитатами `[1]`/`[2]`, `confident`, `sources` |
+| `POST /chats/{id}/messages` | Multi-turn с SSE (`token`/`done`/`event: sources`), condense, score-guard |
+| `POST /documents/upload` | Загрузка нового документа → `202` → инкрементальная индексация в фоне (`BackgroundTasks`, `DocstoreStrategy.UPSERTS`) |
+| `GET /chats/{id}/messages` | История диалога |
+| `DELETE /chats/{id}/messages` | Мягкое удаление истории |
+| `POST /chats/{id}/messages/{mid}/feedback` | Оценка ответа (`up`/`down`) + опционально показанные `sources` (Б5.5) |
+
+Данные — `docs/data_inventory.md` (50+ документов, 4 формата, разбивка по
+категориям и размеру).

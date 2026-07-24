@@ -6,12 +6,15 @@ class RagQueryRequest(BaseModel):
 
 
 class RagSource(BaseModel):
-    text: str
-    source: str | None
+    id: int
+    file_name: str | None
+    page: int | None
     score: float | None
+    snippet: str
 
 
 class RagQueryResponse(BaseModel):
     answer: str
     top_score: float
+    confident: bool
     sources: list[RagSource]

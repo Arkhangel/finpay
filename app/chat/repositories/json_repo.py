@@ -109,7 +109,11 @@ class JsonChatRepository:
         return self._base / "feedback.jsonl"
 
     async def save_feedback(
-        self, message_id: UUID, owner_external_id: str, value: str
+        self,
+        message_id: UUID,
+        owner_external_id: str,
+        value: str,
+        sources: list[dict] | None = None,
     ) -> bool:
         path = await self._feedback_path()
         await aiofiles.os.makedirs(path.parent, exist_ok=True)
@@ -132,6 +136,7 @@ class JsonChatRepository:
             "message_id": str(message_id),
             "owner_external_id": owner_external_id,
             "value": value,
+            "sources": sources,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         async with aiofiles.open(path, "a") as f:

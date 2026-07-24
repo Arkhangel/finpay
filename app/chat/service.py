@@ -7,10 +7,11 @@ from uuid import UUID
 
 from openai import AsyncOpenAI
 
-from app.chat.context import build_sliding_window_context, fit_to_budget
+from app.chat.context import build_sliding_window_context, count_tokens, fit_to_budget
 from app.chat.domain import Chat, ChatMessage
 from app.chat.repository import ChatRepository
 from app.moderation import ModerationResult, ModerationService
+from app.services.rag import CITATION_SYSTEM_PROMPT, REFUSAL_ANSWER, RAGService, build_citation_context
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,18 @@ _MAX_HISTORY_TOKENS = _CONTEXT_WINDOW - _RESPONSE_TOKENS - _SAFETY_MARGIN
 
 _BLOCKED_OUTPUT_MESSAGE = "Не могу показать ответ — он мог нарушить правила"
 
+# Сколько последних сообщений истории отдаётся LLM для condense-переписывания
+# follow-up в самостоятельный вопрос — окно короче основного контекста, это
+# разовый дешёвый вызов только ради retrieval, не ради ответа пользователю.
+_CONDENSE_HISTORY_TURNS = 6
+_CONDENSE_SYSTEM_PROMPT = (
+    "Перепиши последнее сообщение пользователя в самостоятельный вопрос, "
+    "понятный без остального диалога: разверни местоимения и отсылки к "
+    "предыдущим репликам ('он', 'для них', 'а если' и т.п.) в явные термины "
+    "из истории переписки. Ответь только переформулированным вопросом, без "
+    "пояснений и кавычек."
+)
+
 
 class ChatService:
     def __init__(
@@ -30,10 +43,12 @@ class ChatService:
         repository: ChatRepository,
         llm_client: AsyncOpenAI,
         moderation: ModerationService | None = None,
+        rag_service: RAGService | None = None,
     ) -> None:
         self._repo = repository
         self._llm = llm_client
         self._moderation = moderation
+        self._rag = rag_service
 
     async def check_input(self, chat_id: UUID, content: str) -> ModerationResult:
         if self._moderation is None:
@@ -59,6 +74,32 @@ class ChatService:
     async def list_messages(self, chat_id: UUID, limit: int = 50) -> list[ChatMessage]:
         return await self._repo.list_messages(chat_id, limit=limit)
 
+    async def _condense_query(self, raw_history: list[dict], user_content: str) -> str:
+        """Переписывает follow-up в самостоятельный вопрос для retrieval.
+
+        Чинит только поиск: вектор-поиск видит одну строку, и на коротких
+        follow-up ("а для них?") она бессмысленна. На генерацию не влияет —
+        туда история уходит целиком независимо от этого шага."""
+        if not settings.chat.rag_condense_enabled or len(raw_history) <= 1:
+            return user_content
+
+        condense_messages = [
+            {"role": "system", "content": _CONDENSE_SYSTEM_PROMPT},
+            *raw_history[-_CONDENSE_HISTORY_TURNS:],
+        ]
+        try:
+            response = await self._llm.chat.completions.create(
+                model=settings.openai.model,
+                messages=condense_messages,
+                temperature=0.0,
+                max_tokens=128,
+            )
+            condensed = (response.choices[0].message.content or "").strip()
+        except Exception as exc:  # noqa: BLE001 - condense failure must not break retrieval
+            logger.warning("rag_condense_failed error=%s", exc)
+            return user_content
+        return condensed or user_content
+
     async def send_message(
         self,
         chat_id: UUID,
@@ -67,7 +108,8 @@ class ChatService:
         media_meta: dict | None = None,
         result: dict | None = None,
     ) -> AsyncGenerator[str, None]:
-        """`result`, if given, is filled with {"message_id": <assistant ChatMessage.id>} once persisted."""
+        """`result`, if given, is filled with {"message_id": ..., "sources": ...} —
+        "sources" появляется, только если был подключён RAG (self._rag не None)."""
         media_refs = {**media_meta, "part": media_part} if media_part is not None else None
         user_msg = ChatMessage(
             chat_id=chat_id,
@@ -87,7 +129,50 @@ class ChatService:
             chat.system_prompt if chat else None,
             settings.chat.context_window,
         )
-        messages = fit_to_budget(messages, _MAX_HISTORY_TOKENS)
+
+        rag_context_message: dict | None = None
+        if self._rag is not None and user_content:
+            retrieval_query = await self._condense_query(raw_history, user_content)
+            try:
+                retrieval = await self._rag.retrieve(retrieval_query)
+            except Exception as exc:  # noqa: BLE001 - RAG unavailable must not break chat
+                logger.warning("rag_retrieve_failed error=%s", exc)
+                retrieval = None
+
+            if retrieval is not None:
+                if result is not None:
+                    result["sources"] = retrieval["sources"]
+
+                if not retrieval["confident"]:
+                    # Код-гард: генерация вообще не запускается — двухслойная
+                    # защита (код здесь, промпт-инструкция — на случай, если
+                    # RAG выключен, но модель всё равно видит контекст).
+                    assistant_msg = ChatMessage(
+                        chat_id=chat_id, role="assistant", content=REFUSAL_ANSWER
+                    )
+                    await self._repo.append_message(chat_id, assistant_msg)
+                    if result is not None:
+                        result["message_id"] = assistant_msg.id
+                    yield REFUSAL_ANSWER
+                    return
+
+                rag_context_message = {
+                    "role": "system",
+                    "content": (
+                        f"{CITATION_SYSTEM_PROMPT}\n\nКонтекст:\n"
+                        f"{build_citation_context(retrieval['sources'], retrieval['nodes'])}"
+                    ),
+                }
+
+        # rag_context_message — тоже "system", а fit_to_budget собирает все
+        # system-сообщения вместе и не режет их бюджетом — поэтому его токены
+        # резервируются заранее, до вызова fit_to_budget, а не после.
+        reserved_tokens = count_tokens([rag_context_message]) if rag_context_message else 0
+        messages = fit_to_budget(messages, _MAX_HISTORY_TOKENS - reserved_tokens)
+        if rag_context_message:
+            # Перед последним (текущим) сообщением пользователя — ближе к
+            # вопросу для лучшего внимания модели к контексту.
+            messages.insert(len(messages) - 1, rag_context_message)
 
         model = settings.openai.model
         full_response = ""

@@ -36,6 +36,10 @@ services:
       start_period: 25s
     volumes:
       - ./data:/app/data
+      # Б5.5: docstore.json (DocstoreStrategy.UPSERTS) должен пережить рестарт
+      # контейнера — иначе scripts/ingest.py теряет историю хешей и считает
+      # весь корпус "changed" заново при каждом перезапуске.
+      - ./storage:/app/storage
     restart: unless-stopped
 
   bot:
@@ -93,7 +97,11 @@ services:
       timeout: 3s
       retries: 5
     ports:
-      - "5432:5432"
+      # Хостовый порт смещён с 5432 на 5433 — на хосте уже занят системным
+      # (не-докеровским) Postgres. Внутри docker-сети приложение всё равно
+      # обращается по имени сервиса postgres:5432, проброс нужен только для
+      # внешнего psql/GUI-клиента с хоста.
+      - "5433:5432"
 
   qdrant:
     image: qdrant/qdrant:v1.14.0

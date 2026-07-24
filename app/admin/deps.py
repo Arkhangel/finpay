@@ -14,10 +14,6 @@ async def get_admin_session(
     x_admin_token: Annotated[str, Header()],
     session: Annotated[AsyncSession | None, Depends(get_pg_session)],
 ) -> AsyncSession:
-    # Токен проверяется первой же строкой тела функции: если разбить это на два
-    # независимых Depends (router-level auth + route-level session), FastAPI не
-    # гарантирует порядок их резолва — сессия к БД может открыться раньше, чем
-    # отработает проверка заголовка, и наружу утечёт 503 вместо 401 без токена.
     configured = settings.admin_token.get_secret_value()
     if not configured or x_admin_token != configured:
         raise HTTPException(status_code=401, detail="Invalid admin token")

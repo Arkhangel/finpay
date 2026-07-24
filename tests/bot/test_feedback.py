@@ -13,6 +13,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.bot.handlers.feedback import handle_feedback
 from app.bot.keyboards.feedback import feedback_kb
+from app.bot.services import sources_cache
 
 
 @pytest.fixture
@@ -67,6 +68,46 @@ async def test_handle_feedback_without_chat_session_shows_alert():
     backend.submit_feedback.assert_not_called()
     callback.answer.assert_awaited_once()
     assert callback.answer.call_args.kwargs.get("show_alert") is True
+
+
+async def test_handle_feedback_passes_cached_sources(state_with_chat):
+    message_id = uuid4()
+    sources = [{"id": 1, "file_name": "05_refunds.md", "page": 1, "score": 0.9, "snippet": "..."}]
+    sources_cache.remember(message_id, sources)
+
+    callback = MagicMock()
+    callback.data = f"fb:up:{message_id}"
+    callback.message = MagicMock()
+    callback.message.edit_reply_markup = AsyncMock()
+    callback.answer = AsyncMock()
+
+    backend = MagicMock()
+    backend.submit_feedback = AsyncMock()
+
+    await handle_feedback(callback, state_with_chat, backend)
+
+    call_args = backend.submit_feedback.call_args
+    assert call_args[0][1] == message_id
+    assert call_args[0][2] == "up"
+    assert call_args.kwargs["sources"] == sources
+    # Кэш одноразовый — повторное нажатие не должно снова найти источники.
+    assert sources_cache.pop(message_id) is None
+
+
+async def test_handle_feedback_without_cached_sources_passes_none(state_with_chat):
+    message_id = uuid4()
+    callback = MagicMock()
+    callback.data = f"fb:down:{message_id}"
+    callback.message = MagicMock()
+    callback.message.edit_reply_markup = AsyncMock()
+    callback.answer = AsyncMock()
+
+    backend = MagicMock()
+    backend.submit_feedback = AsyncMock()
+
+    await handle_feedback(callback, state_with_chat, backend)
+
+    assert backend.submit_feedback.call_args.kwargs["sources"] is None
 
 
 async def test_handle_feedback_backend_error_shows_friendly_alert(state_with_chat):

@@ -90,6 +90,40 @@ async def test_send_message_fills_result_with_message_id():
     await client.close()
 
 
+async def test_send_message_captures_sources_event_into_result():
+    sources = [{"id": 1, "file_name": "05_refunds.md", "page": 1, "score": 0.9, "snippet": "..."}]
+    sse_body = (
+        f"data: {json.dumps({'type': 'token', 'delta': 'ok'})}\n\n"
+        f"event: sources\ndata: {json.dumps({'sources': sources})}\n\n"
+        f"data: {json.dumps({'type': 'done'})}\n\n"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=sse_body, headers={"content-type": "text/event-stream"})
+
+    client = _make_client(httpx.MockTransport(handler))
+    result: dict = {}
+    chunks = [c async for c in client.send_message(uuid4(), "hello", result=result)]
+
+    assert chunks == ["ok"]
+    assert result["sources"] == sources
+    await client.close()
+
+
+async def test_send_message_without_sources_event_leaves_result_none():
+    sse_body = _sse({"type": "token", "delta": "ok"}, {"type": "done"})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=sse_body, headers={"content-type": "text/event-stream"})
+
+    client = _make_client(httpx.MockTransport(handler))
+    result: dict = {}
+    [c async for c in client.send_message(uuid4(), "hello", result=result)]
+
+    assert result["sources"] is None
+    await client.close()
+
+
 async def test_send_message_stops_at_done():
     sse_body = _sse(
         {"type": "token", "delta": "chunk1"},
@@ -171,6 +205,25 @@ async def test_clear_messages_sends_delete_to_correct_url():
     assert len(received) == 1
     assert received[0].method == "DELETE"
     assert str(chat_id) in str(received[0].url)
+    await client.close()
+
+
+# ── submit_feedback ──────────────────────────────────────────────────────────
+
+async def test_submit_feedback_sends_sources_in_body():
+    received: list[httpx.Request] = []
+    sources = [{"id": 1, "file_name": "05_refunds.md", "page": 1, "score": 0.9, "snippet": "..."}]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return httpx.Response(200, json={"status": "ok", "recorded": True})
+
+    client = _make_client(httpx.MockTransport(handler))
+    await client.submit_feedback(uuid4(), uuid4(), "up", sources=sources)
+
+    assert len(received) == 1
+    body = json.loads(received[0].content)
+    assert body == {"value": "up", "sources": sources}
     await client.close()
 
 

@@ -23,9 +23,17 @@ class ChatRepository(Protocol):
     async def soft_delete_messages(self, chat_id: UUID) -> None: ...
 
     async def save_feedback(
-        self, message_id: UUID, owner_external_id: str, value: str
+        self,
+        message_id: UUID,
+        owner_external_id: str,
+        value: str,
+        sources: list[dict] | None = None,
     ) -> bool:
-        """Returns True if newly recorded, False if this (owner, message) pair already voted."""
+        """Returns True if newly recorded, False if this (owner, message) pair already voted.
+
+        `sources` — список источников, показанных пользователю вместе с этим
+        ответом (Б5.5), для аудита "какой ответ с какими source получил дизлайк".
+        """
         ...
 
     async def record_moderation_incident(

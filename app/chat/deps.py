@@ -8,7 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chat.repository import ChatRepository
 from app.chat.service import ChatService
+from app.deps.providers import get_rag_service
 from app.moderation import ModerationService
+from app.services.rag import RAGService
 from app.settings import settings
 
 
@@ -59,8 +61,9 @@ def get_chat_service(
     repo: Annotated[ChatRepository, Depends(get_repository)],
     llm: Annotated[AsyncOpenAI, Depends(get_openai_client)],
     moderation: Annotated[ModerationService | None, Depends(get_moderation_service)],
+    rag: Annotated[RAGService | None, Depends(get_rag_service)],
 ) -> ChatService:
-    return ChatService(repository=repo, llm_client=llm, moderation=moderation)
+    return ChatService(repository=repo, llm_client=llm, moderation=moderation, rag_service=rag)
 
 
 ChatServiceDep = Annotated[ChatService, Depends(get_chat_service)]

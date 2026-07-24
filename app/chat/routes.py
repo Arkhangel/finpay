@@ -35,6 +35,9 @@ class SystemMessageIn(BaseModel):
 
 class FeedbackIn(BaseModel):
     value: Literal["up", "down"]
+    # Источники, показанные пользователю вместе с оценённым ответом (Б5.5) —
+    # опционально: клиенты, ещё не подключённые к RAG, могут его не слать.
+    sources: list[dict] | None = None
 
 
 @router.post("", response_model=CreateChatOut, status_code=200)
@@ -88,8 +91,18 @@ async def send_message(
 
     async def generator():
         result: dict = {}
+        # json.dumps экранирует \n внутри delta как "\n" (два символа) —
+        # сырой перевод строки никогда не попадает в SSE data-строку, так что
+        # многострочный chunk не рвёт формат события.
         async for delta in svc.send_message(chat_id, content, media_part, media_meta, result=result):
             yield f"data: {json.dumps({'type': 'token', 'delta': delta}, ensure_ascii=False)}\n\n"
+
+        # sources — до done: клиенты (веб/бот), которые останавливают чтение
+        # стрима сразу после "done", не должны пропустить финальный event.
+        sources = result.get("sources")
+        if sources is not None:
+            yield f"event: sources\ndata: {json.dumps({'sources': sources}, ensure_ascii=False)}\n\n"
+
         message_id = result.get("message_id")
         yield f"data: {json.dumps({'type': 'done', 'message_id': str(message_id) if message_id else None})}\n\n"
 
@@ -131,7 +144,9 @@ async def submit_feedback(
     if chat is None:
         raise HTTPException(status_code=404, detail="Chat not found")
 
-    created = await feedback.save_feedback(repo, message_id, chat.owner_external_id, body.value)
+    created = await feedback.save_feedback(
+        repo, message_id, chat.owner_external_id, body.value, body.sources
+    )
     return {"status": "ok", "recorded": created}
 
 

@@ -19,4 +19,5 @@ wheels/
 /data/transactions.db
 /var/
 /.cache/
+/storage/
 .env

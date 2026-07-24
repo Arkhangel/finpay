@@ -52,10 +52,14 @@ class BackendClient:
         mime: str | None = None,
         result: dict | None = None,
     ) -> AsyncIterator[str]:
-        """`result`, if given, is filled with {"message_id": <UUID | None>} once the stream ends."""
+        """`result`, if given, is filled with {"message_id": <UUID | None>, "sources": [...] | None}
+        once the stream ends — "sources" — только если бэкенд подключён к RAG (Б5.5)."""
         # Без ретрая: частично отданный стрим нельзя повторить, не задвоив LLM-вызов.
         files = {"media": ("file.bin", media, mime)} if media else None
         data = {"content": content}
+        if result is not None:
+            result["sources"] = None
+        current_event: str | None = None
         async with self._client.stream(
             "POST",
             f"/chats/{chat_id}/messages",
@@ -65,12 +69,21 @@ class BackendClient:
         ) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():
+                if line.startswith("event: "):
+                    current_event = line.removeprefix("event: ")
+                    continue
                 if not line.startswith("data: "):
                     continue
                 payload = json.loads(line.removeprefix("data: "))
-                if payload["type"] == "token":
+                if current_event == "sources":
+                    if result is not None:
+                        result["sources"] = payload.get("sources")
+                    current_event = None
+                    continue
+                current_event = None
+                if payload.get("type") == "token":
                     yield payload["delta"]
-                elif payload["type"] == "done":
+                elif payload.get("type") == "done":
                     if result is not None:
                         message_id = payload.get("message_id")
                         result["message_id"] = UUID(message_id) if message_id else None
@@ -83,9 +96,12 @@ class BackendClient:
         logger.info("cleared_messages chat_id=%s", chat_id)
 
     @_retry_on_connect_error
-    async def submit_feedback(self, chat_id: UUID, message_id: UUID, value: str) -> None:
+    async def submit_feedback(
+        self, chat_id: UUID, message_id: UUID, value: str, sources: list[dict] | None = None
+    ) -> None:
         resp = await self._client.post(
-            f"/chats/{chat_id}/messages/{message_id}/feedback", json={"value": value}
+            f"/chats/{chat_id}/messages/{message_id}/feedback",
+            json={"value": value, "sources": sources},
         )
         resp.raise_for_status()
 

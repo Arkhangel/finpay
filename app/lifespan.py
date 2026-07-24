@@ -71,12 +71,13 @@ async def lifespan(app: FastAPI):
         logger.warning("Qdrant unavailable — vector search disabled")
         app.state.vector_store = None
 
-    # RAG-индекс (М5.3) строится один раз на старте, не на каждый запрос.
+    # RAG-сервис (Б5.5) подключается к коллекции, наполненной
+    # scripts/ingest.py — сама индексация здесь не выполняется.
     rag_service = RAGService()
     try:
         await asyncio.to_thread(rag_service.build)
         app.state.rag_service = rag_service
-        logger.info("RAG index ready: %s", settings.rag.collection)
+        logger.info("RAG index ready: %s", settings.rag.kb_collection)
     except Exception:
         logger.warning("RAG index unavailable — /rag/query disabled")
         app.state.rag_service = None
