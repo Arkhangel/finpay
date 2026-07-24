@@ -50,6 +50,7 @@ services:
       - "9000:9000"
     environment:
       BOT__TOKEN: ${BOT__TOKEN}
+      BOT__ADMIN_IDS: ${BOT__ADMIN_IDS:-[]}
       BOT__BACKEND_URL: http://app:8000
       BOT__BOT_URL: http://bot:9000
       BOT__INTERNAL_TOKEN: ${BOT__INTERNAL_TOKEN}

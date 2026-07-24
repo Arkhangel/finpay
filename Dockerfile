@@ -32,7 +32,14 @@ FROM python:3.13-slim-bookworm AS runtime
 
 RUN useradd --create-home --uid 1000 appuser
 
-COPY --from=builder --chown=appuser:appuser /app /app
+# .venv (torch/llama-index, GB+) и .cache (эмбеддинг-модель) — отдельными
+# слоями от кода: при изменении .py-файлов пересоздаётся только маленький
+# слой ниже, а не вся venv целиком. Без этого разделения любой рестарт
+# исходников заново материализует ~11GB на диск (было: 79G -> 100% диска
+# за две пересборки подряд).
+COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
+COPY --from=builder --chown=appuser:appuser /app/.cache /app/.cache
+COPY --chown=appuser:appuser . /app
 
 USER appuser
 

@@ -11,7 +11,8 @@ from app.chat.context import build_sliding_window_context, count_tokens, fit_to_
 from app.chat.domain import Chat, ChatMessage
 from app.chat.repository import ChatRepository
 from app.moderation import ModerationResult, ModerationService
-from app.services.rag import CITATION_SYSTEM_PROMPT, REFUSAL_ANSWER, RAGService, build_citation_context
+from app.prompts.loader import render_system_prompt
+from app.services.rag import CITATION_SYSTEM_PROMPT, RAGService, build_citation_context
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,12 @@ class ChatService:
         interface: str,
         system_prompt: str | None = None,
     ) -> Chat:
+        # Без явного system_prompt (например, звонки из бота) чат раньше
+        # оставался с "голой" LLM без персоны FinPay и без правила честного
+        # отказа — render_system_prompt был подключён только в старом
+        # app/routers/chat.py, но не в этом (M4) сервисе.
+        if system_prompt is None:
+            system_prompt = render_system_prompt(project_name=settings.project_name)
         return await self._repo.create_chat(owner_external_id, interface, system_prompt)
 
     async def get_chat(self, chat_id: UUID) -> Chat | None:
@@ -143,26 +150,23 @@ class ChatService:
                 if result is not None:
                     result["sources"] = retrieval["sources"]
 
-                if not retrieval["confident"]:
-                    # Код-гард: генерация вообще не запускается — двухслойная
-                    # защита (код здесь, промпт-инструкция — на случай, если
-                    # RAG выключен, но модель всё равно видит контекст).
-                    assistant_msg = ChatMessage(
-                        chat_id=chat_id, role="assistant", content=REFUSAL_ANSWER
-                    )
-                    await self._repo.append_message(chat_id, assistant_msg)
-                    if result is not None:
-                        result["message_id"] = assistant_msg.id
-                    yield REFUSAL_ANSWER
-                    return
-
-                rag_context_message = {
-                    "role": "system",
-                    "content": (
-                        f"{CITATION_SYSTEM_PROMPT}\n\nКонтекст:\n"
-                        f"{build_citation_context(retrieval['sources'], retrieval['nodes'])}"
-                    ),
-                }
+                # Низкий score НЕ обрывает генерацию целиком: в чате (в
+                # отличие от одношагового /rag/query) сообщения — это не
+                # только фактические вопросы по базе, но и приветствия,
+                # small-talk, follow-up без своего смысла вне контекста. Жёсткий
+                # code-guard здесь на каждое "Привет"/"тест" отвечал бы
+                # REFUSAL_ANSWER, даже не спросив LLM. Вместо этого при низком
+                # score просто не добавляем RAG-контекст — генерация идёт по
+                # обычному системному промпту (у него своё правило честного
+                # отказа для действительно неотвечаемых вопросов).
+                if retrieval["confident"]:
+                    rag_context_message = {
+                        "role": "system",
+                        "content": (
+                            f"{CITATION_SYSTEM_PROMPT}\n\nКонтекст:\n"
+                            f"{build_citation_context(retrieval['sources'], retrieval['nodes'])}"
+                        ),
+                    }
 
         # rag_context_message — тоже "system", а fit_to_budget собирает все
         # system-сообщения вместе и не режет их бюджетом — поэтому его токены

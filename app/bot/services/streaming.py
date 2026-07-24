@@ -3,15 +3,26 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import time
 import uuid
 from collections.abc import AsyncIterator
 
 import httpx
 from aiogram import Bot
 from aiogram.enums import ChatAction
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.types import Message
 
+logger = logging.getLogger(__name__)
+
 _TYPING_INTERVAL = 4.0  # Telegram "печатает..." индикатор живёт ~5 сек
+
+# Telegram флудит 429 на editMessageText/sendMessageDraft для одного и того же
+# сообщения чаще ~1 раза в секунду — без троттлинга вызов на каждый токен
+# гарантированно словит TelegramRetryAfter (проверено вживую: падало на 2-3
+# сообщении подряд).
+_DRAFT_MIN_INTERVAL = 0.8
 
 
 async def _keep_typing(bot: Bot, chat_id: int) -> None:
@@ -23,6 +34,15 @@ async def _keep_typing(bot: Bot, chat_id: int) -> None:
         pass
 
 
+async def _send_draft(bot: Bot, chat_id: int, text: str, draft_id: int) -> None:
+    """Отправка черновика, устойчивая к редкому 429 — драфт лучше пропустить
+    (следующий обновит текст целиком), чем уронить весь стрим ради превью."""
+    try:
+        await bot.send_message_draft(chat_id=chat_id, text=text, draft_id=draft_id)
+    except TelegramRetryAfter as exc:
+        logger.warning("draft_flood_control chat_id=%s retry_after=%s", chat_id, exc.retry_after)
+
+
 async def stream_to_chat(message: Message, tokens: AsyncIterator[str]) -> Message:
     """Возвращает итоговое отправленное сообщение (например, чтобы навесить клавиатуру фидбека)."""
     # Один draft_id на весь стрим — Telegram склеивает вызовы в один черновик;
@@ -30,6 +50,7 @@ async def stream_to_chat(message: Message, tokens: AsyncIterator[str]) -> Messag
     bot = message.bot
     draft_id = uuid.uuid4().int & 0xFFFFFFFF
     buffer = ""
+    last_draft_at = 0.0
 
     typing_task = asyncio.create_task(_keep_typing(bot, message.chat.id))
     try:
@@ -39,10 +60,13 @@ async def stream_to_chat(message: Message, tokens: AsyncIterator[str]) -> Messag
             if not buffer:
                 typing_task.cancel()
             buffer += delta
-            if buffer.strip():
-                await bot.send_message_draft(
-                    chat_id=message.chat.id, text=buffer, draft_id=draft_id,
-                )
+            now = time.monotonic()
+            # Дебаунс: Telegram флудит 429 на апдейт одного сообщения чаще
+            # ~1 раза в секунду — отправляем черновик не на каждый токен, а
+            # не чаще _DRAFT_MIN_INTERVAL.
+            if buffer.strip() and now - last_draft_at >= _DRAFT_MIN_INTERVAL:
+                await _send_draft(bot, message.chat.id, buffer, draft_id)
+                last_draft_at = now
     finally:
         typing_task.cancel()
 
