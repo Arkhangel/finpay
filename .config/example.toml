@@ -12,7 +12,9 @@ admin_token = ""                  # секрет для /chats/admin/* (заго
 [openai]
 api_key = ""
 host = "https://api.groq.com/openai/v1"
-model = ""
+# openai/gpt-oss-120b — Groq депрекировал llama-3.1-8b-instant и
+# llama-3.3-70b-versatile на free/developer-tier (2026-07-25).
+model = "openai/gpt-oss-120b"
 whisper_model = "whisper-1"       # STT-модель для голосовых сообщений (см. app/chat/media.py)
 
 [embeddings]
@@ -28,13 +30,32 @@ api_key = ""                             # секрет Qdrant REST/gRPC API, з
 collection = "documents"
 
 [rag]
-corpus_dir = "data/rag-block-03"        # 10 документов домена FinPay (М5.3)
-collection = "rag_block_03"              # отдельная от "documents" коллекция — LlamaIndex хранит ноды в своём формате
+# rag_block_03 — исторический корпус Б5.3/Б5.4 (10 документов), отдельная
+# коллекция от продакшен-базы, см. kb_collection ниже. Не смешивать.
+corpus_dir = "data/rag-block-03"
+collection = "rag_block_03"
 collection_baremetal = "rag_block_03_baremetal"
-chunk_size = 512
+
+# Б5.5: полный корпоративный корпус (data/<category>/...), продакшен-коллекция.
+kb_collection = "finpay_kb"
+docstore_path = "storage/docstore_kb.json"   # SimpleDocumentStore для DocstoreStrategy.UPSERTS
+
+chunk_size = 512                             # baseline fixed/recursive-чанкинга (app/services/chunking.py)
 chunk_overlap = 64
-similarity_top_k = 3
-score_threshold = 0.75                   # ниже — честный fallback "не знаю", а не выдумывание ответа
+chunking_strategy = "semantic"               # "semantic" победил в Б5.4 (docs/chunking_experiment.md)
+semantic_buffer_size = 1
+semantic_breakpoint_percentile_threshold = 95
+
+similarity_top_k = 10                        # top-K из retrieval до re-ranking
+reranker_enabled = true                      # BAAI/bge-reranker-v2-m3, см. app/services/reranker.py
+reranker_candidate_k = 20
+rerank_top_n = 5                             # top-N после re-ranking, идёт в контекст LLM
+
+# Порог "не найдено" — сравнивается с score ПОСЛЕ re-ranking (сырой score
+# cross-encoder, не косинус — несопоставимая шкала с классическим similarity).
+# 0.005 — калибровка на finpay_kb (172 документа), подробности и честный
+# разбор ограничений — docs/rag.md, раздел "Threshold для отказа".
+score_threshold = 0.005
 
 [redis]
 url = "redis://localhost:6379"
@@ -55,6 +76,7 @@ storage_dir = "./var"
 context_strategy = "sliding"  # "sliding" | "hybrid"
 context_window = 10
 database_url = "postgresql+asyncpg://postgres:postgres@localhost:5432/finpay"
+rag_condense_enabled = true    # Б5.5: переписывает follow-up ("а для них?") в самостоятельный вопрос для retrieval
 
 [moderation]
 enabled = true                                          # false — полностью отключить модерацию
@@ -66,3 +88,20 @@ keywords_path = "app/moderation/moderation_keywords.yaml"
 # [moderation.category_thresholds]
 # violence = 0.3
 # self_harm = 0.2
+
+[eval]
+# Б5.6: судья RAGAS-метрик + LLM для генерации golden dataset — намеренно
+# другая модель, чем продакшен (openai.model выше), чтобы не путать роли.
+# Тот же Groq-провайдер, без Anthropic/OpenAI ключей (см. docs/rag_evaluation.md).
+# qwen/qwen3.6-27b не подошла — не проходит structured output (Instructor
+# Mode.JSON), который требуют RAGAS metrics.collections; gpt-oss-20b (младший
+# брат продакшен-модели, другие веса) работает стабильно.
+judge_model = "openai/gpt-oss-20b"
+golden_dataset_path = "tests/eval/golden_dataset.json"
+results_dir = "tests/eval/results"
+
+# scripts/generate_testset.py — разовая генерация golden dataset, настоящий
+# OpenAI (не Groq): TestsetGenerator делает много LLM-вызовов на knowledge
+# graph, на free tier Groq это часы (см. docs/rag_evaluation.md).
+testset_llm_api_key = ""
+testset_llm_model = "gpt-5.4-mini"

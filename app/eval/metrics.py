@@ -11,18 +11,25 @@ Embeddings для AnswerRelevancy — self-hosted (HuggingFaceEmbedding, e5-base
 
 from __future__ import annotations
 
-import re
-
 from openai import AsyncOpenAI
+from pydantic import BaseModel
 from ragas.embeddings import HuggingFaceEmbeddings
 from ragas.embeddings.base import BaseRagasEmbedding
 from ragas.llms import llm_factory
 from ragas.llms.base import InstructorBaseRagasLLM
+from ragas.metrics import discrete_metric
 from ragas.metrics.collections import AnswerRelevancy, ContextPrecision, ContextRecall, Faithfulness
 
 from app.settings import settings as app_settings
 
-_CITATION_RE = re.compile(r"\[\d+\]")
+_HAS_CITATION_PROMPT = (
+    "Содержит ли ответ ссылку на источник: маркер вида '[1]'/'[doc_id]', "
+    "имя файла, или фразу 'согласно …'?\n\nОтвет: {response}"
+)
+
+
+class _CitationVerdict(BaseModel):
+    has_citation: bool
 
 
 class _SymmetricE5Embeddings(HuggingFaceEmbeddings):
@@ -67,6 +74,24 @@ def build_embeddings() -> BaseRagasEmbedding:
     return _SymmetricE5Embeddings(model=emb.model, device=emb.device, normalize_embeddings=True)
 
 
+def make_has_citation(llm: InstructorBaseRagasLLM):
+    """LLM-судья через @discrete_metric (ragas.metrics) — критерий 3 чекпоинта 5.
+
+    Не regex на `[N]`: промпт по заданию явно требует ловить и текстовые формы
+    ссылки ("согласно …", упоминание имени файла), которые маркер-based проверка
+    пропустила бы. Судья — тот же LLM, что и для остальных метрик (та же
+    структурированная генерация через llm.agenerate, что и в build_judge)."""
+
+    @discrete_metric(name="has_citation", allowed_values=["yes", "no"])
+    async def has_citation(user_input: str, response: str) -> str:
+        verdict = await llm.agenerate(
+            _HAS_CITATION_PROMPT.format(response=response), _CitationVerdict,
+        )
+        return "yes" if verdict.has_citation else "no"
+
+    return has_citation
+
+
 def build_metrics(
     llm: InstructorBaseRagasLLM | None = None, embeddings: BaseRagasEmbedding | None = None,
 ) -> dict[str, object]:
@@ -77,15 +102,8 @@ def build_metrics(
         "answer_relevancy": AnswerRelevancy(llm=llm, embeddings=embeddings),
         "context_precision": ContextPrecision(llm=llm),
         "context_recall": ContextRecall(llm=llm),
+        "has_citation": make_has_citation(llm),
     }
-
-
-def make_has_citation(answer: str) -> bool:
-    """Не-LLM метрика: есть ли хоть одна ссылка [N] в ответе — контракт
-    CITATION_SYSTEM_PROMPT (app/services/rag.py) требует ссылку на каждый
-    факт. Дёшево ловит грубые нарушения формата без judge-вызова; не
-    заменяет Faithfulness (та проверяет содержательную обоснованность)."""
-    return bool(_CITATION_RE.search(answer))
 
 
 async def eval_row(row: dict, metrics: dict[str, object]) -> dict:
@@ -107,11 +125,12 @@ async def eval_row(row: dict, metrics: dict[str, object]) -> dict:
     context_recall = await metrics["context_recall"].ascore(
         user_input=user_input, retrieved_contexts=retrieved_contexts, reference=reference,
     )
+    has_citation = await metrics["has_citation"].ascore(user_input=user_input, response=response)
 
     return {
         "faithfulness": faithfulness.value,
         "answer_relevancy": answer_relevancy.value,
         "context_precision": context_precision.value,
         "context_recall": context_recall.value,
-        "has_citation": make_has_citation(response),
+        "has_citation": has_citation.value == "yes",
     }

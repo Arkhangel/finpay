@@ -1,21 +1,39 @@
-"""Unit-тест для app/eval/metrics.py::make_has_citation — единственная
-чистая функция в модуле (остальное требует живого judge LLM)."""
+"""Unit-тесты для app/eval/metrics.py::make_has_citation — LLM-judged
+@discrete_metric (критерий 3 чекпоинта 5), judge мокается (без реального
+API-вызова)."""
 from __future__ import annotations
 
-from app.eval.metrics import make_has_citation
+from unittest.mock import AsyncMock
+
+import pytest
+
+from app.eval.metrics import _CitationVerdict, make_has_citation
 
 
-def test_has_citation_true_with_marker():
-    assert make_has_citation("Комиссия 1% от суммы [1].") is True
+def _fake_llm(has_citation: bool):
+    llm = AsyncMock()
+    llm.agenerate.return_value = _CitationVerdict(has_citation=has_citation)
+    return llm
 
 
-def test_has_citation_true_multiple_markers():
-    assert make_has_citation("Лимит 100000 [1], срок 3 дня [2].") is True
+@pytest.mark.asyncio
+async def test_has_citation_true_when_judge_says_yes():
+    metric = make_has_citation(_fake_llm(True))
+    result = await metric.ascore(user_input="q", response="Комиссия 1% от суммы [1].")
+    assert result.value == "yes"
 
 
-def test_has_citation_false_without_marker():
-    assert make_has_citation("Комиссия 1% от суммы.") is False
+@pytest.mark.asyncio
+async def test_has_citation_false_when_judge_says_no():
+    metric = make_has_citation(_fake_llm(False))
+    result = await metric.ascore(user_input="q", response="Комиссия 1% от суммы.")
+    assert result.value == "no"
 
 
-def test_has_citation_false_on_refusal():
-    assert make_has_citation("По базе не нашёл, могу эскалировать.") is False
+@pytest.mark.asyncio
+async def test_has_citation_calls_judge_with_response_text():
+    llm = _fake_llm(True)
+    metric = make_has_citation(llm)
+    await metric.ascore(user_input="q", response="согласно нашей политике возвратов")
+    prompt = llm.agenerate.call_args.args[0]
+    assert "согласно нашей политике возвратов" in prompt

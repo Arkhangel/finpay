@@ -49,14 +49,17 @@
 ## Как прогнать метрики
 
 ```
-python scripts/run_eval.py
+python scripts/run_eval.py --label baseline
 ```
 
 Для каждой строки золотого датасета: `RAGService.evaluate_inputs()` (реальный
 retrieval + генерация системы) → RAGAS-метрики (`app/eval/metrics.py`, judge —
 `settings.eval.judge_model`, намеренно другая модель, чем продакшен) +
-`has_citation` (не-LLM проверка формата). Результат — `{out-name}_rows.csv` и
-`{out-name}_summary.json` в `settings.eval.results_dir`.
+`has_citation` (LLM-судья через `@discrete_metric`, критерий 3 чекпоинта 5 —
+ловит и маркеры `[1]`, и текстовые формы вроде "согласно …", не только regex).
+Результат — `tests/eval/results/{YYYY-MM-DD_HHMM}_{label}.csv` (per-row) и
+`{YYYY-MM-DD_HHMM}_{label}_summary.json` (агрегаты) — audit log с разным
+timestamp на каждый прогон (baseline / A-B эксперименты).
 
 ## Прочие файлы в этой папке
 
@@ -64,6 +67,8 @@ retrieval + генерация системы) → RAGAS-метрики (`app/ev
   `app/services/retrieval_eval.py`), отдельный от RAGAS golden dataset выше.
 - `mini_benchmark.json` — ручной мини-бенчмарк релевантных/нерелевантных
   фрагментов, использовался до RAGAS-пайплайна.
-- `golden_dataset_raw_test3.csv` — 3 строки из тестового прогона
-  `--provider openai` (см. app/settings/eval.py), безопасно смёржить в
-  финальный `golden_dataset_raw.csv` вместо перегенерации.
+
+Промежуточные `golden_dataset_raw*.csv` (сырой вывод `generate_testset.py` до
+ручной вычитки) и `generate_batches.log` — не хранятся в репозитории,
+удалены после того, как нужные строки перенесены в `golden_dataset.json`;
+при повторной генерации появятся заново по тому же пути.

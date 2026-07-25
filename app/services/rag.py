@@ -164,20 +164,13 @@ class RAGService:
             "confident": confident,
         }
 
-    async def answer(self, question: str) -> dict:
-        retrieval = await self.retrieve(question)
-
+    async def _generate(self, question: str, retrieval: dict) -> str:
         # Честный fallback ДО вызова LLM: если top-1 retrieval ниже порога,
         # генерация вообще не запускается — не тратим вызов модели на
         # заведомо нерелевантный контекст и не рискуем, что она всё равно
         # что-то придумает поверх мусорных чанков.
         if not retrieval["confident"]:
-            return {
-                "answer": REFUSAL_ANSWER,
-                "top_score": retrieval["top_score"],
-                "confident": False,
-                "sources": retrieval["sources"],
-            }
+            return REFUSAL_ANSWER
 
         context = build_citation_context(retrieval["sources"], retrieval["nodes"])
         messages = [
@@ -185,13 +178,34 @@ class RAGService:
             ChatMessage(role=MessageRole.USER, content=f"Контекст:\n{context}\n\nВопрос: {question}"),
         ]
         response = await self._llm.achat(messages)
-        answer_text = (response.message.content or "").strip()
+        return (response.message.content or "").strip()
 
+    async def answer(self, question: str) -> dict:
+        retrieval = await self.retrieve(question)
+        answer_text = await self._generate(question, retrieval)
         return {
             "answer": answer_text,
             "top_score": retrieval["top_score"],
-            "confident": True,
+            "confident": retrieval["confident"],
             "sources": retrieval["sources"],
+        }
+
+    async def evaluate_inputs(self, question: str) -> dict:
+        """question -> {user_input, response, retrieved_contexts} — плоский
+        формат для RAGAS-метрик (блок 5.6, см. app/eval/metrics.py).
+
+        retrieved_contexts — полный текст нод (node.get_content()), а не
+        обрезанный до 300 символов snippet из retrieve()["sources"] (тот
+        усечён для API-ответа /rag/query; Faithfulness и т.п. метрикам нужен
+        полный контекст, иначе обоснованный по факту ответ будет считаться
+        неподтверждённым)."""
+        retrieval = await self.retrieve(question)
+        response = await self._generate(question, retrieval)
+        retrieved_contexts = [node.node.get_content() for node in retrieval["nodes"]]
+        return {
+            "user_input": question,
+            "response": response,
+            "retrieved_contexts": retrieved_contexts,
         }
 
     async def aclose(self) -> None:

@@ -38,6 +38,29 @@ dependencies = [
     "pymupdf>=1.28.0",
 ]
 
+[project.optional-dependencies]
+# Eval-time зависимости (блок 5.6) — не нужны в проде, ставятся по требованию:
+# uv sync --extra eval --extra tracing
+eval = [
+    "ragas>=0.4,<0.5",
+    # RAGAS 0.4 тянет langchain-community в ядре; в свежих 0.4.x путь импорта
+    # ломается без пина (import ragas падает на
+    # langchain_community.chat_models.vertexai).
+    "langchain-community<0.4",
+    "pandas>=2",
+    "arize-phoenix>=5",
+    "arize-phoenix-evals<3",
+    "rapidfuzz>=3.14.5",
+]
+tracing = [
+    # >=4 обязателен с llama-index-core 0.14.x: 3.x импортирует
+    # llama_index.core.base.agent.types (BaseAgent/BaseAgentWorker), которого
+    # в 0.14 уже нет — ModuleNotFoundError при instrument() (проверено вживую).
+    "openinference-instrumentation-llama-index>=4,<5",
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp",
+]
+
 [dependency-groups]
 dev = [
     "garak>=0.15.1",
@@ -46,6 +69,19 @@ dev = [
     "pytest-mock>=3.14",
     "reportlab>=5.0.0",
     "testcontainers[postgresql]>=4.14.2",
+]
+
+[tool.uv]
+# garak (dev) пинит datasets<4.0, ragas>=0.4 (eval) требует datasets>=4.0 —
+# несовместимы в одном универсальном резолве, но никогда не ставятся вместе
+# (garak — security-сканы, ragas — офлайн eval-прогоны). Помечаем конфликт
+# явно, чтобы uv резолвил их раздельными форками лока, а не считал проект
+# неразрешимым.
+conflicts = [
+    [
+        { group = "dev" },
+        { extra = "eval" },
+    ],
 ]
 
 [tool.pytest.ini_options]

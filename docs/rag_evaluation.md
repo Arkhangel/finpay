@@ -2,9 +2,10 @@
 
 Продолжение линии `docs/rag.md` (Б5.5, query pipeline с re-ranking и
 цитатами) и `docs/chunking_experiment.md` (Б5.4, retrieval-метрики). Здесь —
-RAGAS-метрики генерации (Faithfulness/AnswerRelevancy/ContextPrecision/
-ContextRecall), Phoenix-трейсинг всего пайплайна (не только LLM-вызова), и
-два A/B эксперимента поверх продакшен-конфигурации.
+пять метрик (Faithfulness/AnswerRelevancy/ContextPrecision/ContextRecall из
+`ragas.metrics.collections` + `has_citation` через `@discrete_metric`),
+Phoenix-трейсинг всего пайплайна (не только LLM-вызова), и два A/B
+эксперимента поверх продакшен-конфигурации.
 
 **Статус на 2026-07-25: golden dataset готов, baseline/A-B прогоны — нет.**
 Причина — Groq исчерпал дневной лимит токенов (TPD) на продакшен-модели
@@ -23,6 +24,28 @@ ContextRecall), Phoenix-трейсинг всего пайплайна (не т�
 | Генерация тестсета (`scripts/generate_testset.py --provider groq`) | `openai/gpt-oss-120b` (частично) / `openai/gpt-oss-20b` (после переключения) | Groq | Не судья и не участник оценки — конфликта интересов нет, поэтому можно совпадать с продакшен-моделью |
 | Embeddings для AnswerRelevancy | self-hosted `intfloat/multilingual-e5-base` | локально | Тот же принцип, что и везде в проекте — не тащить OpenAI-эмбеддинги ради одной метрики |
 | Tracing | Phoenix (`phoenix.otel.register`) + `OpenAIInstrumentor` + `LlamaIndexInstrumentor` | — | Второй инструментатор нужен, иначе retrieval/embedding-спаны не попадают в трейс — виден только сам LLM-вызов генерации |
+
+### Отклонения от рекомендаций задания (осознанные)
+
+Задание рекомендует конкретно `llm_factory("claude-sonnet-4-6", provider="anthropic",
+client=AsyncAnthropic())` для judge и `OpenAIEmbeddings(client=AsyncOpenAI(),
+model="text-embedding-3-small")` для AnswerRelevancy. Оба раза выбран
+бесплатный self-hosted/Groq вариант вместо платного — тот же принцип, что и
+в Б5.5 для продакшен-модели (см. `docs/rag.md`):
+
+- **Judge**: `openai/gpt-oss-20b` (Groq) вместо `claude-sonnet-4-6` (Anthropic).
+  Ключевое свойство — ДРУГАЯ модель, чем продакшен — сохранено; конкретный
+  провайдер для этого свойства не важен. `anthropic>=0.40` поэтому не добавлен
+  в группу `eval` в `pyproject.toml` (не используется).
+- **Embeddings для AnswerRelevancy**: self-hosted `intfloat/multilingual-e5-base`
+  вместо `text-embedding-3-small`. Та же self-hosted эмбеддинг-модель, что и
+  для retrieval во всём проекте — не заводить отдельную OpenAI-зависимость
+  ради одной метрики.
+
+Оба отклонения не меняют методологию метрик (RAGAS считает их одинаково
+независимо от того, чей LLM/embeddings API за ними стоит) — только источник
+финансирования вызовов. Отмечено явно, чтобы на защите это звучало как
+осознанный выбор, а не как «забыли выбрать модель из задания».
 
 ## Golden dataset (`tests/eval/golden_dataset.json`, 36 строк)
 
@@ -96,6 +119,15 @@ score-guard-отказ (`REFUSAL_ANSWER` в `app/services/rag.py`).
    похоже на скользящее 24-часовое окно, а не фиксированный сброс в
    полночь: значит, если исчерпать его, ждать восстановления в течение той
    же сессии бессмысленно.
+6. **`has_citation` изначально была написана как regex-проверка (`\[\d+\]`),
+   не LLM-судья — не по заданию.** Задание прямо требует `@discrete_metric`
+   с промптом-судьёй, ловящим не только маркеры `[1]`/`[doc_id]`, но и
+   текстовые формы ссылки («согласно …», упоминание имени файла) — regex это
+   принципиально не может поймать. Переписано на `ragas.metrics.discrete_metric`
+   с async-функцией, вызывающей `llm.agenerate(prompt, response_model=...)`
+   (см. `app/eval/metrics.py::make_has_citation`). Проверено вживую на 3
+   случаях: `[1]` → yes, «согласно нашей политике возвратов» → yes (то, что
+   regex пропустил бы), без ссылки → no.
 
 ## Ограничения (текущие, будут сняты в следующей сессии)
 
@@ -112,11 +144,11 @@ score-guard-отказ (`REFUSAL_ANSWER` в `app/services/rag.py`).
 
 ## Baseline (TODO — ждёт восстановления лимита Groq)
 
-`python scripts/run_eval.py` не запускался вживую. Как только лимит
-`gpt-oss-120b` восстановится:
-1. Прогнать `scripts/run_eval.py` на `tests/eval/golden_dataset.json`.
-2. Заполнить таблицу ниже реальными числами (`{out-name}_summary.json` в
-   `settings.eval.results_dir`).
+`python scripts/run_eval.py --label baseline` не запускался вживую. Как
+только лимит `gpt-oss-120b` восстановится:
+1. Прогнать `scripts/run_eval.py --label baseline` на `tests/eval/golden_dataset.json`.
+2. Заполнить таблицу ниже реальными числами из
+   `tests/eval/results/{timestamp}_baseline_summary.json`.
 
 | Метрика | Значение |
 |---|---|
