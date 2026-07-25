@@ -21,3 +21,8 @@ wheels/
 /.cache/
 /storage/
 .env
+
+# Разовые debug-логи скриптов (например, батчевая генерация golden dataset
+# в scripts/generate_testset.py) — операционный шум, не доказательная база;
+# итоги процесса документируются в docs/rag_evaluation.md и tests/eval/README.md.
+tests/eval/*.log
