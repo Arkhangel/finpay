@@ -56,12 +56,23 @@ async def _run(dataset: list[dict], concurrency: int) -> list[dict]:
 
     async def _one(item: dict) -> dict:
         question = item["user_input"]
-        async with sem:
-            live = await service.evaluate_inputs(question)
-        row = {**live, "reference": item["reference"]}
-        scores = await eval_row(row, metrics)
+        base = {"user_input": question, "reference": item["reference"]}
+        try:
+            # И evaluate_inputs (продакшен-модель), и eval_row (judge) —
+            # оба бьют по Groq и оба могут упасть (TPD-лимит, json_validate_
+            # failed на вырожденных отказах, и т.п., см. docs/rag_evaluation.md,
+            # "Известные проблемы"). asyncio.gather без обработки ошибок
+            # роняет ВЕСЬ прогон на первой же такой строке, теряя уже
+            # потраченные на остальные вопросы токены — оборачиваем целиком.
+            async with sem:
+                live = await service.evaluate_inputs(question)
+            row = {**live, "reference": item["reference"]}
+            scores = await eval_row(row, metrics)
+        except Exception as exc:
+            logger.warning("eval_row_failed question=%r error=%s", question[:60], exc)
+            return {**base, "error": str(exc)}
         logger.info("evaluated question=%r scores=%s", question[:60], scores)
-        return {"user_input": question, "reference": item["reference"], "response": live["response"], **scores}
+        return {**base, "response": live["response"], **scores}
 
     try:
         return list(await asyncio.gather(*(_one(item) for item in dataset)))
@@ -72,10 +83,13 @@ async def _run(dataset: list[dict], concurrency: int) -> list[dict]:
 def _aggregate(rows: list[dict]) -> dict:
     df = pd.DataFrame(rows)
     metric_cols = ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]
+    ok = df[df["error"].isna()] if "error" in df.columns else df
+    errors = len(df) - len(ok)
     return {
-        **{col: round(df[col].mean(), 4) for col in metric_cols},
-        "citation_rate": round(df["has_citation"].mean(), 4),
+        **{col: round(ok[col].mean(), 4) for col in metric_cols},
+        "citation_rate": round(ok["has_citation"].mean(), 4),
         "n": len(df),
+        "errors": errors,
     }
 
 

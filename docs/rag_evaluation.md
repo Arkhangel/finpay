@@ -128,6 +128,37 @@ score-guard-отказ (`REFUSAL_ANSWER` в `app/services/rag.py`).
    (см. `app/eval/metrics.py::make_has_citation`). Проверено вживую на 3
    случаях: `[1]` → yes, «согласно нашей политике возвратов» → yes (то, что
    regex пропустил бы), без ссылки → no.
+7. **`Faithfulness.ascore()` (и, вероятно, другие collections-метрики)
+   иногда падают `json_validate_failed` на `gpt-oss-20b` без видимой связи
+   с содержанием — не только на отказах.** Первый живой прогон
+   `run_eval.py --label baseline` упал на первом же вопросе («Где вводить
+   ИНН?») — score-guard сработал, `RAGService` вернул `REFUSAL_ANSWER`, и
+   `StatementGeneratorPrompt` (первый шаг Faithfulness — разбивает ответ на
+   атомарные утверждения) не смог получить валидный JSON на этом вырожденном
+   входе (0 утверждений). **Гипотеза "только отказы" не подтвердилась**:
+   второй прогон (после фикса ниже) упал на 6 строках подряд, из которых
+   только 1 была реальным отказом — остальные 5 получили нормальные,
+   уверенные ответы от продакшен-модели и всё равно не прошли Faithfulness.
+   Похоже на общую флаки-совместимость `gpt-oss-20b`+Groq JSON-mode со
+   схемой `List[str]` (`StatementGeneratorOutput.statements`), не привязанную
+   к конкретному контенту. **Дополнительная находка:** Instructor (библиотека
+   под капотом `ragas.llms.llm_factory`) по умолчанию `max_retries=1` —
+   то есть НОЛЬ повторных попыток при сбое валидации; `ragas.llms.base`
+   не прокидывает `max_retries` через `llm_factory(...)`/`InstructorModelArgs`
+   наружу, так что штатно увеличить число попыток нельзя без правки ragas.
+   **Решение:** `scripts/run_eval.py` оборачивает try/except ВСЮ строку
+   целиком (и `RAGService.evaluate_inputs()`, и `eval_row()` — обе бьют по
+   Groq и обе могут упасть), ошибка помечается в CSV (`error`) и не
+   участвует в агрегатах `{label}_summary.json`, прогон продолжается на
+   остальных строках. Не пытаться выдумывать эвристику вида "отказ =
+   faithfulness 1.0" — это подмена измерения допущением, честнее просто
+   считать такие строки `errors` и указать их долю в отчёте.
+8. **Продакшен-модель `gpt-oss-120b` "восстановилась" лишь на бумаге.**
+   Полтора часа спустя после исчерпания лимита маленький тестовый вызов
+   (5 токенов) прошёл успешно — но полноценный прогон `run_eval.py` упал
+   через несколько вопросов с той же ошибкой (`TPD Limit 200000, Used
+   199226`): восстановилось лишь несколько сотен токенов, не весь дневной
+   бюджет. Маленький пинг — ложный признак готовности, не доказательство.
 
 ## Ограничения (текущие, будут сняты в следующей сессии)
 
@@ -136,19 +167,43 @@ score-guard-отказ (`REFUSAL_ANSWER` в `app/services/rag.py`).
   `scripts/run_eval.py`, baseline, оба A/B эксперимента) не может быть
   реально прогнан, пока лимит не восстановится — ориентировочно нужно ждать
   порядка суток от момента, когда бюджет был исчерпан (не полночь по UTC, а
-  скользящее окно, см. баг №5 выше).
+  скользящее окно, см. баг №5 выше). **Важно: маленький тестовый вызов (5
+  токенов) может пройти успешно, даже когда реального бюджета почти нет** —
+  проверено вживую: пинг прошёл, но первая же попытка `--label baseline`
+  упала на 3-м вопросе с той же ошибкой `TPD Limit 200000, Used 199226` —
+  значит, восстановилось лишь несколько сотен токенов, не весь лимит.
+  **Не считать успешный маленький пинг доказательством, что можно гнать
+  полный прогон** — проверять только полным прогоном, готовым остановиться
+  на первой же 429.
 - Датасет собран смешанным способом (RAGAS + ручные пары) — это прозрачно
   зафиксировано полем `source` в каждой строке и в `tests/eval/README.md`,
   но стоит иметь в виду при интерпретации результатов: RAGAS-строки
   (4 шт.) и ручные (32 шт.) могут иметь разное распределение сложности.
+- **Одного восстановления дневного лимита Groq, скорее всего, не хватит на
+  всё сразу.** Прикидка по токенам: один ответ `RAGService.answer()` на
+  golden dataset — контекст до `rerank_top_n=5` чанков по `chunk_size=512` ≈
+  2500-3000 токенов + промпт + ответ, то есть baseline (36 вопросов) сам по
+  себе ≈ 90-125 тыс. токенов — больше половины дневных 200k на
+  `gpt-oss-120b`. С judge-стороны ещё хуже: 5 метрик × 36 строк × 3 прогона
+  (baseline + 2 A/B) = 540 judge-вызовов на `gpt-oss-20b`, каждый видит тот
+  же тяжёлый `retrieved_contexts` — это может кратно превысить дневной
+  бюджет судьи. **Решение: baseline и оба A/B эксперимента растягиваются на
+  несколько дней (по одному прогону на восстановление лимита), не ужимается
+  golden dataset и не режется набор метрик** — надёжность важнее скорости.
+- **Docker/Qdrant недоступны в среде этой сессии** (`docker compose up` не
+  проходит — демон недоступен), поэтому переиндексация для A/B-1 (см. ниже)
+  подготовлена (команды проверены на подстановку переменных окружения), но
+  не выполнена вживую. Выполнить нужно там, где Qdrant реально поднимается
+  (`docker compose up -d qdrant`, см. `compose.yaml`).
 
 ## Baseline (TODO — ждёт восстановления лимита Groq)
 
-`python scripts/run_eval.py --label baseline` не запускался вживую. Как
-только лимит `gpt-oss-120b` восстановится:
-1. Прогнать `scripts/run_eval.py --label baseline` на `tests/eval/golden_dataset.json`.
-2. Заполнить таблицу ниже реальными числами из
-   `tests/eval/results/{timestamp}_baseline_summary.json`.
+```
+python scripts/run_eval.py --label baseline
+```
+
+Как только лимит `gpt-oss-120b` восстановится — прогнать и заполнить таблицу
+ниже реальными числами из `tests/eval/results/{timestamp}_baseline_summary.json`.
 
 | Метрика | Значение |
 |---|---|
@@ -158,8 +213,86 @@ score-guard-отказ (`REFUSAL_ANSWER` в `app/services/rag.py`).
 | Context Recall | TODO |
 | Citation rate (`has_citation`) | TODO |
 
-## A/B эксперимент №1 — TODO
+## A/B эксперимент №1: chunking — semantic (прод) vs recursive/1024 (TODO)
 
-## A/B эксперимент №2 — TODO
+Б5.4 (`docs/chunking_experiment.md`) уже сравнил fixed_size/recursive/semantic
+на **retrieval**-метриках (chunk_size=512 у всех трёх) и выбрал semantic —
+она и в проде (`chunking_strategy=semantic`). Тот вариант из задания
+(`chunk_size 512→1024`) неприменим буквально: semantic не использует
+`chunk_size`. Поэтому эксперимент — semantic (прод) vs alternative-стратегия
+с `chunk_size=1024`, теперь на **generation**-метриках (Faithfulness и т.п.),
+которые Б5.4 не мерил вообще.
+
+**Важный нюанс, найденный при подготовке:** `scripts/ingest.py::_build_pipeline`
+различает только `chunking_strategy == "semantic"` vs всё остальное — при
+любом другом значении всегда берётся `SentenceSplitter(chunk_size,
+chunk_overlap)` (эквивалент **recursive** из Б5.4), а не `TokenTextSplitter`
+из `app/services/chunking.py::fixed_size()` (та функция используется только
+в `scripts/chunking_experiment.py`, не в продакшен-индексации). Так что
+сравнение по факту — semantic vs recursive/1024, не semantic vs fixed_size/1024.
+
+**Переиндексация уже выполнена и проверена** (Docker/Qdrant поднялись в
+рамках этой же сессии) — осталась только сама eval-часть, которая ждёт
+Groq:
+
+```bash
+# 1. Переиндексировать корпус в ОТДЕЛЬНУЮ коллекцию с recursive/1024 —
+#    отдельные kb_collection и docstore_path, чтобы не задеть прод.
+RAG__KB_COLLECTION=finpay_kb_chunk1024 \
+RAG__CHUNKING_STRATEGY=recursive \
+RAG__CHUNK_SIZE=1024 \
+RAG__CHUNK_OVERLAP=64 \
+RAG__DOCSTORE_PATH=storage/docstore_kb_chunk1024.json \
+python scripts/ingest.py data/
+
+# 2. Прогнать eval на альтернативной коллекции (тот же golden dataset).
+RAG__KB_COLLECTION=finpay_kb_chunk1024 \
+python scripts/run_eval.py --label chunk_recursive_1024
+```
+
+**Статистика по чанкам (реальный прогон, без Groq):**
+
+| Стратегия | Документов | Чанков | Чанков/документ |
+|---|---|---|---|
+| semantic (прод, `finpay_kb`) | 172 | 233 | 1.35 |
+| recursive / chunk_size=1024 (`finpay_kb_chunk1024`) | 172 | 172 | 1.00 |
+
+При `chunk_size=1024` подавляющее большинство документов корпуса (в среднем
+~1000-1800 символов) укладываются в один чанк целиком — recursive/1024
+практически не режет документы, тогда как semantic всё равно находит внутри
+многих документов смысловые разрывы и делит их на 1-2+ части. Retrieval на
+новой коллекции проверен вживую (`RAGService.retrieve()`, без LLM) —
+работает корректно (пример: top_score 0.858 на вопросе про комиссию,
+верно найден `02_tariffs.md`).
+
+| Вариант | Faithfulness | Answer Relevancy | Context Precision | Context Recall | has_citation | Latency (avg, мс) |
+|---|---|---|---|---|---|---|
+| baseline (semantic) | TODO | TODO | TODO | TODO | TODO | TODO |
+| recursive / chunk_size=1024 | TODO | TODO | TODO | TODO | TODO | TODO |
+
+**Выбор:** TODO — "беру вариант X, потому что …" после реальных чисел.
+
+## A/B эксперимент №2: re-ranker on (прод) vs off (TODO)
+
+Б5.4 обосновал `reranker_enabled=True` только retrieval-метриками (MRR@10
+0.917→1.000, ценой ~30x latency). Здесь — проверка на generation-метриках:
+действительно ли более точный top-5 после re-ranking даёт заметно лучший
+Faithfulness/Context Precision, или разница в пределах шума RAGAS (±5-10%,
+см. референсы задания). Zero новых коллекций — та же `finpay_kb`, чистый
+toggle:
+
+```bash
+python scripts/run_eval.py --label reranker_on    # = baseline, можно переиспользовать его CSV
+RAG__RERANKER_ENABLED=false python scripts/run_eval.py --label reranker_off
+```
+
+| Вариант | Faithfulness | Answer Relevancy | Context Precision | Context Recall | has_citation | Latency (avg, мс) |
+|---|---|---|---|---|---|---|
+| baseline (re-ranker on) | TODO | TODO | TODO | TODO | TODO | TODO |
+| re-ranker off | TODO | TODO | TODO | TODO | TODO | TODO |
+
+**Выбор:** TODO.
+
+## Финальная конфигурация — TODO
 
 ## Failure analysis — TODO
