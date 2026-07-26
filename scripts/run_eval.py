@@ -58,16 +58,20 @@ async def _run(dataset: list[dict], concurrency: int) -> list[dict]:
         question = item["user_input"]
         base = {"user_input": question, "reference": item["reference"]}
         try:
+            # semaphore держим вокруг ВСЕГО (и evaluate_inputs, и eval_row) —
+            # раньше он оборачивал только evaluate_inputs, и eval_row (judge,
+            # gpt-oss-20b, 8000 токенов/минуту, см. docs/rag_evaluation.md
+            # баг №9/№12) уходил в asyncio.gather БЕЗ ограничения: все N
+            # строк одновременно ломились к judge, что и держало TPM-бюджет
+            # на нуле — не одна строка сама себе лимит, а весь датасет разом.
             # И evaluate_inputs (продакшен-модель), и eval_row (judge) —
             # оба бьют по Groq и оба могут упасть (TPD-лимит, json_validate_
-            # failed на вырожденных отказах, и т.п., см. docs/rag_evaluation.md,
-            # "Известные проблемы"). asyncio.gather без обработки ошибок
-            # роняет ВЕСЬ прогон на первой же такой строке, теряя уже
-            # потраченные на остальные вопросы токены — оборачиваем целиком.
+            # failed на вырожденных отказах, и т.п.) — оборачиваем try целиком,
+            # чтобы asyncio.gather не ронял весь прогон на одной строке.
             async with sem:
                 live = await service.evaluate_inputs(question)
-            row = {**live, "reference": item["reference"]}
-            scores = await eval_row(row, metrics)
+                row = {**live, "reference": item["reference"]}
+                scores = await eval_row(row, metrics)
         except Exception as exc:
             logger.warning("eval_row_failed question=%r error=%s", question[:60], exc)
             return {**base, "error": str(exc)}
@@ -85,11 +89,17 @@ def _aggregate(rows: list[dict]) -> dict:
     metric_cols = ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]
     ok = df[df["error"].isna()] if "error" in df.columns else df
     errors = len(df) - len(ok)
+    # Метрики считаются независимо друг от друга (app/eval/metrics.py::eval_row,
+    # см. docs/rag_evaluation.md баг №10) — конкретная метрика может не
+    # досчитаться и на "успешной" строке (error is NaN, но faithfulness=None).
+    # mean() у pandas сам пропускает None/NaN, но важно явно показать n_scored
+    # per metric — иначе непонятно, среднее по 36 строкам или по 12.
     return {
         **{col: round(ok[col].mean(), 4) for col in metric_cols},
         "citation_rate": round(ok["has_citation"].mean(), 4),
         "n": len(df),
         "errors": errors,
+        "n_scored": {col: int(ok[col].notna().sum()) for col in (*metric_cols, "has_citation")},
     }
 
 
@@ -97,9 +107,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Прогон RAGAS-метрик по golden dataset")
     parser.add_argument("--dataset", default=app_settings.eval.golden_dataset_path)
     parser.add_argument(
-        "--concurrency", type=int, default=2,
-        help="Параллельных вопросов (генерация продакшен-модели + judge — обе на Groq, "
-             "держим небольшим, чтобы не упереться в общий rate limit).",
+        "--concurrency", type=int, default=1,
+        help="Параллельных вопросов. judge (gpt-oss-20b) имеет всего 8000 токенов/минуту "
+             "(см. docs/rag_evaluation.md) — на 5 метрик/строку этого хватает впритык даже "
+             "на concurrency=1, при 2+ почти каждый вызов уходит в retry по TPM.",
     )
     parser.add_argument(
         "--label", default="baseline",
