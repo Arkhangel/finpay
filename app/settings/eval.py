@@ -18,6 +18,14 @@ class EvalSettings(BaseModel):
     golden_dataset_path: str = "tests/eval/golden_dataset.json"
     results_dir: str = "tests/eval/results"
 
+    # Эксперимент 2026-07-26: Groq/gpt-oss-20b оказался ненадёжен именно в
+    # роли judge — json_validate_failed на Faithfulness (см. баг №11
+    # docs/rag_evaluation.md) плюс собственный дневной TPD-лимит, отдельно
+    # исчерпанный на отладке. "groq" — текущий дефолт; "openai" — вернуться
+    # к рекомендации задания (gpt-5.4-mini), переиспользуя testset_llm_*
+    # ключ ниже — настоящий Instructor JSON-mode должен быть надёжнее.
+    judge_provider: str = "groq"
+
     # scripts/generate_testset.py — ОТДЕЛЬНЫЙ разовый шаг, не судья и не
     # продакшен. RAGAS TestsetGenerator строит knowledge graph множеством
     # LLM-вызовов на документ (NER/summary/headline-экстракция) + вопросы —

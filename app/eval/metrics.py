@@ -118,15 +118,29 @@ def build_judge() -> InstructorBaseRagasLLM:
 
     provider="openai" в llm_factory — это выбор Instructor-адаптера по ФОРМЕ
     клиента (OpenAI-совместимый), а не по реальному провайдеру; сам клиент
-    указывает на Groq через base_url. provider="groq" здесь не подходит —
-    Instructor трактует его как настоящий groq-SDK клиент (client.messages.*),
-    а не OpenAI-совместимый (проверено вживую: AttributeError на 'messages').
+    может указывать и на Groq (settings.eval.judge_provider="groq", через
+    base_url), и на настоящий OpenAI (judge_provider="openai", см.
+    docs/rag_evaluation.md баг №11 — Groq/gpt-oss-20b ненадёжен именно как
+    judge). provider="groq" в llm_factory не подходит ни для того, ни для
+    другого случая — Instructor трактует его как настоящий groq-SDK клиент
+    (client.messages.*), а не OpenAI-совместимый (проверено вживую:
+    AttributeError на 'messages').
     """
+    ev = app_settings.eval
+    if ev.judge_provider == "openai":
+        if not ev.testset_llm_api_key:
+            raise RuntimeError(
+                "EVAL__TESTSET_LLM_API_KEY не задан — нужен настоящий OpenAI-ключ "
+                "для judge_provider='openai'."
+            )
+        client = AsyncOpenAI(api_key=ev.testset_llm_api_key, base_url=ev.testset_llm_api_base)
+        return llm_factory(ev.testset_llm_model, provider="openai", client=client)
+
     oa = app_settings.openai
     if not oa.api_key:
         raise RuntimeError("OPENAI__API_KEY не задан — нужен Groq-ключ для judge LLM.")
     client = AsyncOpenAI(api_key=oa.api_key, base_url=oa.host or None)
-    return llm_factory(app_settings.eval.judge_model, provider="openai", client=client)
+    return llm_factory(ev.judge_model, provider="openai", client=client)
 
 
 def build_embeddings() -> BaseRagasEmbedding:
