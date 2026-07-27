@@ -125,6 +125,18 @@ def build_judge() -> InstructorBaseRagasLLM:
     другого случая — Instructor трактует его как настоящий groq-SDK клиент
     (client.messages.*), а не OpenAI-совместимый (проверено вживую:
     AttributeError на 'messages').
+
+    temperature/top_p/max_tokens переопределены: InstructorModelArgs по
+    умолчанию ставит temperature=0.01, top_p=0.1 — это НЕ безобидные
+    дефолты, а подтверждённая вживую причина json_validate_failed на
+    Faithfulness (см. docs/rag_evaluation.md баг №13): чистый тест той же
+    связки system+user промпта дал 2 сбоя из 4 попыток именно с этими
+    параметрами и 0 из 6 без них. Причина, по которой ragas сам не чинит
+    это для gpt-oss-20b: `_map_openai_params()` определяет reasoning-модели
+    (которым нужны temperature=1.0/без top_p) по `model.startswith("gpt-")`,
+    а наш model-id — `"openai/gpt-oss-20b"` (с префиксом провайдера) — не
+    матчится вообще, так что остаются агрессивные дефолты вместо любой
+    коррекции.
     """
     ev = app_settings.eval
     if ev.judge_provider == "openai":
@@ -134,13 +146,19 @@ def build_judge() -> InstructorBaseRagasLLM:
                 "для judge_provider='openai'."
             )
         client = AsyncOpenAI(api_key=ev.testset_llm_api_key, base_url=ev.testset_llm_api_base)
-        return llm_factory(ev.testset_llm_model, provider="openai", client=client)
+        return llm_factory(
+            ev.testset_llm_model, provider="openai", client=client,
+            temperature=0.2, top_p=1.0, max_tokens=2048,
+        )
 
     oa = app_settings.openai
     if not oa.api_key:
         raise RuntimeError("OPENAI__API_KEY не задан — нужен Groq-ключ для judge LLM.")
     client = AsyncOpenAI(api_key=oa.api_key, base_url=oa.host or None)
-    return llm_factory(ev.judge_model, provider="openai", client=client)
+    return llm_factory(
+        ev.judge_model, provider="openai", client=client,
+        temperature=0.2, top_p=1.0, max_tokens=2048,
+    )
 
 
 def build_embeddings() -> BaseRagasEmbedding:

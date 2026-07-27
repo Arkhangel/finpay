@@ -17,6 +17,13 @@
 агрегированный {timestamp}_{label}_summary.json рядом — audit log с
 человекочитаемым label (baseline, chunk_1024, top_k_10 и т.п.), по которому
 можно строить временной ряд A/B-прогонов.
+
+Прогон на Groq free tier медленный (пауза между метриками + ретраи, см.
+app/eval/metrics.py) и может прерваться (лимит, Ctrl-C, краш) на середине —
+каждая строка пишется в results/_wip_{label}.csv СРАЗУ по готовности, не в
+конце. Повторный запуск с тем же --label подхватывает уже посчитанные
+вопросы из _wip-файла и не пересчитывает их — считать заново можно, только
+удалив/переименовав _wip-файл вручную.
 """
 
 from __future__ import annotations
@@ -48,13 +55,43 @@ def _load_golden_dataset(path: str | Path) -> list[dict]:
     return data
 
 
-async def _run(dataset: list[dict], concurrency: int) -> list[dict]:
+# Полный набор колонок для КАЖДОЙ строки wip-файла — успешные строки не
+# заполняют "error", проваленные не заполняют метрики, но обе должны писать
+# ОДИНАКОВЫЙ набор колонок. Иначе построчный append (header пишется только
+# один раз, для самой первой строки) молча смещает данные под чужими
+# заголовками, если вторая строка вдруг короче/длиннее первой.
+_ROW_COLUMNS = [
+    "user_input", "reference", "response",
+    "faithfulness", "answer_relevancy", "context_precision", "context_recall", "has_citation",
+    "error",
+]
+
+
+def _load_wip(wip_path: Path) -> list[dict]:
+    if not wip_path.exists():
+        return []
+    return pd.read_csv(wip_path).to_dict("records")
+
+
+async def _run(dataset: list[dict], concurrency: int, wip_path: Path, done_questions: set[str]) -> None:
     service = RAGService()
     service.build()
     metrics = build_metrics()
     sem = asyncio.Semaphore(concurrency)
+    write_lock = asyncio.Lock()
 
-    async def _one(item: dict) -> dict:
+    async def _append_wip(row: dict) -> None:
+        # Пишем СРАЗУ по готовности строки, не в конце всего прогона — иначе
+        # прерывание (TPM/TPD-лимит, Ctrl-C, краш) на 30-й из 36 строк теряет
+        # ВСЁ, а не только недосчитанное. write_lock — на случай concurrency>1,
+        # чтобы параллельные строки не перемешали строки в CSV. Колонки
+        # нормализуем на полный _ROW_COLUMNS (см. комментарий выше).
+        full_row = {col: row.get(col) for col in _ROW_COLUMNS}
+        async with write_lock:
+            header = not wip_path.exists()
+            pd.DataFrame([full_row], columns=_ROW_COLUMNS).to_csv(wip_path, mode="a", header=header, index=False)
+
+    async def _one(item: dict) -> None:
         question = item["user_input"]
         base = {"user_input": question, "reference": item["reference"]}
         try:
@@ -74,12 +111,16 @@ async def _run(dataset: list[dict], concurrency: int) -> list[dict]:
                 scores = await eval_row(row, metrics)
         except Exception as exc:
             logger.warning("eval_row_failed question=%r error=%s", question[:60], exc)
-            return {**base, "error": str(exc)}
+            await _append_wip({**base, "error": str(exc)})
+            return
         logger.info("evaluated question=%r scores=%s", question[:60], scores)
-        return {**base, "response": live["response"], **scores}
+        await _append_wip({**base, "response": live["response"], **scores})
 
+    todo = [item for item in dataset if item["user_input"] not in done_questions]
+    if len(todo) < len(dataset):
+        logger.info("resume_from_wip skipped=%d remaining=%d", len(dataset) - len(todo), len(todo))
     try:
-        return list(await asyncio.gather(*(_one(item) for item in dataset)))
+        await asyncio.gather(*(_one(item) for item in todo))
     finally:
         await service.aclose()
 
@@ -120,11 +161,17 @@ def main() -> None:
     args = parser.parse_args()
 
     dataset = _load_golden_dataset(args.dataset)
-    rows = asyncio.run(_run(dataset, args.concurrency))
 
     results_dir = Path(app_settings.eval.results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
+    wip_path = results_dir / f"_wip_{args.label}.csv"
 
+    already = _load_wip(wip_path)
+    done_questions = {row["user_input"] for row in already}
+
+    asyncio.run(_run(dataset, args.concurrency, wip_path, done_questions))
+
+    rows = _load_wip(wip_path)  # финальный набор = то, что было в wip, + всё дописанное за этот прогон
     stem = f"{datetime.now():%Y-%m-%d_%H%M}_{args.label}"
     per_row_path = results_dir / f"{stem}.csv"
     pd.DataFrame(rows).to_csv(per_row_path, index=False)
@@ -133,6 +180,7 @@ def main() -> None:
     summary_path = results_dir / f"{stem}_summary.json"
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    wip_path.unlink()  # финальный timestamped CSV теперь единственный источник правды
     logger.info("eval_done rows=%d per_row=%s summary=%s", len(rows), per_row_path, summary_path)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
