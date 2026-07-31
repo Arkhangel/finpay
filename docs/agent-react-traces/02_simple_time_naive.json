@@ -1,0 +1,19 @@
+{
+  "task": "Который сейчас час в Алматы?",
+  "answer": "Сейчас в Алматы — 13:23.",
+  "steps": 2,
+  "trace": [
+    {
+      "step": 0,
+      "tool_name": "get_current_time",
+      "tool_args": {
+        "timezone": "Asia/Almaty"
+      },
+      "tool_result": "2026-07-31T13:23:13.589805+05:00",
+      "duration_ms": 458.8,
+      "llm_input_tokens": 338,
+      "llm_output_tokens": 68
+    }
+  ],
+  "tokens_total": 406
+}

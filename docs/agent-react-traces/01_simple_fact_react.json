@@ -1,0 +1,30 @@
+{
+  "task": "Найди в базе знаний стандартную комиссию за транзакцию в FinPay и назови её.",
+  "answer": "Стандартная комиссия за транзакцию в FinPay составляет **1.8 % от суммы**.",
+  "steps": 2,
+  "trace": [
+    {
+      "step": 0,
+      "thought": "",
+      "tool_name": "search_knowledge_base",
+      "tool_args": {
+        "query": "стандартная комиссия за транзакцию FinPay"
+      },
+      "observation": "\n\nТарифы и комиссии FinPay Базовые ставки\n- Стандартный тариф: 1.8% от суммы транзакции — применяется по умолчанию для\nвсех новых аккаунтов.\n- Корпоративный тариф: доступен при обороте от 500 000 ₽ в ",
+      "critic_verdict": "OK",
+      "latency_ms": 1220.9,
+      "llm_input_tokens": 735,
+      "llm_output_tokens": 82
+    }
+  ],
+  "usage": {
+    "prompt": 1999,
+    "completion": 189,
+    "total": 2188,
+    "by_role": {
+      "main": 1753,
+      "critic": 435
+    }
+  },
+  "revisions_used": 0
+}
