@@ -1,11 +1,9 @@
 import logging
-import os
 import traceback
 from functools import lru_cache
 
 from pydantic import SecretStr, ValidationError
-from pydantic_settings import SettingsConfigDict, BaseSettings, PydanticBaseSettingsSource, TomlConfigSettingsSource, \
-    SettingsError
+from pydantic_settings import SettingsConfigDict, BaseSettings, PydanticBaseSettingsSource, SettingsError
 
 from app.settings.bot import BotSettings
 from app.settings.chat import ChatSettings
@@ -21,7 +19,6 @@ logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
-    environment: str = os.getenv("ENVIRONMENT", "test")
     project_name: str = "FinPay"
 
     openai: OpenAISettings = OpenAISettings()
@@ -45,7 +42,7 @@ class Settings(BaseSettings):
     reload: bool = False
 
     model_config = SettingsConfigDict(
-        toml_file=f".config/{environment}.toml",
+        env_file=".env",
         case_sensitive=False,
         env_nested_delimiter="__",
     )
@@ -60,7 +57,11 @@ class Settings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        return env_settings, TomlConfigSettingsSource(settings_cls)
+        # Реальные переменные окружения (заданы в шелле/docker-compose) всегда
+        # выигрывают у .env — им .env служит только запасным дефолтом, не
+        # переопределением. Внутри контейнера .env физически отсутствует
+        # (.dockerignore), поэтому dotenv_settings там просто не даёт значений.
+        return env_settings, dotenv_settings
 
 
 @lru_cache

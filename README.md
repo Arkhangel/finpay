@@ -10,66 +10,62 @@ FastAPI-сервис на базе LLM для поддержки платёжн�
 uv sync --all-groups
 
 # Скопировать конфиг и вписать API-ключ
-cp .config/example.toml .config/local.toml
-# отредактировать .config/local.toml: openai.api_key, openai.host, openai.model
+cp .env.example .env
+# отредактировать .env: OPENAI__API_KEY, OPENAI__HOST, OPENAI__MODEL
 
 # Запустить сервер
-ENVIRONMENT=local uv run main.py
+uv run main.py
 ```
 
-## Окружения
+## Конфигурация
 
-Конфиги хранятся в `.config/<env>.toml`. Окружение задаётся переменной `ENVIRONMENT`:
+Единственный источник конфига — `.env` в корне проекта (шаблон — `.env.example`).
+Он используется дважды: `docker compose` подставляет эти переменные в
+`compose.yaml` через `${...}`, а `app/settings/__init__.py` читает тот же файл
+напрямую (`SettingsConfigDict(env_file=".env")`) при запуске скриптов на
+хосте без Docker — никакого отдельного шага/окружения не нужно, `.env`
+подхватывается всегда, если файл существует. Внутри Docker-контейнера `.env`
+физически нет (`.dockerignore`) — там только переменные, которые реально
+передал сам compose.
 
-| Значение | Файл конфига |
-|----------|-------------|
-| `local` | `.config/local.toml` |
-| `dev` | `.config/dev.toml` |
-| `test` | `.config/test.toml` |
-
-Любой параметр из TOML можно переопределить env-переменной. Вложенные поля разделяются `__`:
+Любой параметр можно переопределить настоящей env-переменной — она всегда
+приоритетнее значения из `.env`. Вложенные поля разделяются `__`:
 
 ```bash
-ENVIRONMENT=local \
 OPENAI__API_KEY=gsk_... \
 OPENAI__HOST=https://api.groq.com/openai/v1 \
-OPENAI__MODEL=llama-3.3-70b-versatile \
+OPENAI__MODEL=openai/gpt-oss-120b \
 uv run main.py
 ```
 
 ### Ключевые параметры конфига
 
-```toml
-[openai]
-api_key   = ""                              # ключ провайдера
-host      = "https://api.groq.com/openai/v1"
-model     = "llama-3.3-70b-versatile"
+```bash
+OPENAI__API_KEY=                              # ключ провайдера
+OPENAI__HOST=https://api.groq.com/openai/v1
+OPENAI__MODEL=openai/gpt-oss-120b
 
-[redis]
-url       = "redis://localhost:6379"
-ttl       = 3600                            # секунд, TTL кеша ответов
+REDIS__URL=redis://localhost:6379
+REDIS__TTL=3600                               # секунд, TTL кеша ответов
 
-[chat]
-repository       = "json"                   # "json" | "postgres"
-storage_dir      = "./var"                  # папка для JSON-хранилища
-context_strategy = "sliding"               # стратегия контекста
-context_window   = 10                       # N последних сообщений
-database_url     = "postgresql+asyncpg://postgres:postgres@localhost:5432/finpay"
+CHAT__REPOSITORY=json                         # "json" | "postgres"
+CHAT__STORAGE_DIR=./var                       # папка для JSON-хранилища
+CHAT__CONTEXT_STRATEGY=sliding                # стратегия контекста
+CHAT__CONTEXT_WINDOW=10                       # N последних сообщений
+CHAT__DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5433/finpay
 
-[bot]
-token          = ""                            # токен от @BotFather
-backend_url    = "http://localhost:8000"       # адрес REST API
-bot_url        = "http://localhost:9000"       # backend -> bot: базовый URL для /notify
-internal_token = ""                            # секрет для /notify (BOT__INTERNAL_TOKEN)
-bot_api_port   = 9000                          # порт внутреннего API бота
-admin_ids      = []                            # Telegram user_id с доступом к /stats, /users, /broadcast
+BOT__TOKEN=                                   # токен от @BotFather
+BOT__BACKEND_URL=http://localhost:8000        # адрес REST API
+BOT__BOT_URL=http://localhost:9000            # backend -> bot: базовый URL для /notify
+BOT__INTERNAL_TOKEN=                          # секрет для /notify
+BOT__BOT_API_PORT=9000                        # порт внутреннего API бота
+BOT__ADMIN_IDS=[]                             # Telegram user_id с доступом к /stats, /users, /broadcast
 
-[moderation]
-enabled        = true                          # false — отключить модерацию целиком
-use_openai_api = false                         # true — включить omni-moderation-latest
+MODERATION__ENABLED=true                      # false — отключить модерацию целиком
+MODERATION__USE_OPENAI_API=false              # true — включить omni-moderation-latest
 
-security_enabled = true                     # false — отключить security-слой
-admin_token      = ""                       # секрет для /chats/admin/* (ADMIN_TOKEN)
+SECURITY_ENABLED=true                         # false — отключить security-слой
+ADMIN_TOKEN=                                  # секрет для /chats/admin/* (ADMIN_TOKEN)
 ```
 
 ## Режимы запуска
@@ -90,7 +86,7 @@ uv run main.py bot    # Telegram-бот
 ```bash
 redis-server --daemonize yes
 
-ENVIRONMENT=local uv run main.py rest
+uv run main.py rest
 ```
 
 ### Docker Compose (рекомендуется)
@@ -136,18 +132,17 @@ curl http://localhost:8000/docs     # Swagger UI
 
 ### Переключение хранилища
 
-В `.config/local.toml`:
+В `.env`:
 
-```toml
-[chat]
-repository = "json"      # файловое JSONL-хранилище (по умолчанию)
-# repository = "postgres"  # PostgreSQL (нужны Docker и миграция)
+```bash
+CHAT__REPOSITORY=json      # файловое JSONL-хранилище (по умолчанию)
+# CHAT__REPOSITORY=postgres  # PostgreSQL (нужны Docker и миграция)
 ```
 
 При первом использовании Postgres — применить миграцию:
 
 ```bash
-ENVIRONMENT=local uv run alembic upgrade head
+uv run alembic upgrade head
 ```
 
 ### Chat API
@@ -178,19 +173,18 @@ ENVIRONMENT=local uv run alembic upgrade head
 ### Запуск бота
 
 ```bash
-# Прописать в .config/local.toml:
-# [bot]
-# token = "123456:ABC-..."
-# backend_url = "http://localhost:8000"
-# internal_token = "локальный-секрет-для-notify"
+# Прописать в .env:
+# BOT__TOKEN=123456:ABC-...
+# BOT__BACKEND_URL=http://localhost:8000
+# BOT__INTERNAL_TOKEN=локальный-секрет-для-notify
 
-ENVIRONMENT=local uv run main.py bot
+uv run main.py bot
 ```
 
 REST API должен быть запущен отдельно:
 
 ```bash
-ENVIRONMENT=local uv run main.py rest
+uv run main.py rest
 ```
 
 ## Production-обвязка (Б4.4)
@@ -269,7 +263,7 @@ ENVIRONMENT=local uv run main.py rest
 uv run scripts/estimate_embedding_cost.py
 
 # Смоук-тест: латентность кеша + деградация score без query:/passage: префиксов
-ENVIRONMENT=local uv run scripts/embeddings_smoke.py
+uv run scripts/embeddings_smoke.py
 ```
 
 Mini-benchmark (`query`/`relevant`/`irrelevant`) — [`tests/eval/mini_benchmark.json`](tests/eval/mini_benchmark.json).
@@ -292,10 +286,10 @@ docker compose up -d qdrant
 open http://localhost:6333/dashboard
 
 # Загрузить базу знаний (118 чанков, идемпотентно — повторный запуск без дублей)
-ENVIRONMENT=local uv run scripts/load_to_qdrant.py
+uv run scripts/load_to_qdrant.py
 
 # cosine vs dot + 3 примера фильтров (match/range/must+must_not) → docs/vector_store.md
-ENVIRONMENT=local uv run scripts/qdrant_experiments.py
+uv run scripts/qdrant_experiments.py
 ```
 
 Детали, обоснование метрики и HNSW-параметров — [`docs/vector_store.md`](docs/vector_store.md).
@@ -311,19 +305,19 @@ ENVIRONMENT=local uv run scripts/qdrant_experiments.py
 
 ```bash
 # Все тесты (без вызовов LLM и без Docker)
-ENVIRONMENT=test uv run pytest tests/ -m "not llm" -v
+uv run pytest tests/ -m "not llm" -v
 
 # Только chat-модуль (Postgres-тесты пропускаются без Docker)
-ENVIRONMENT=test uv run pytest tests/chat/ -v
+uv run pytest tests/chat/ -v
 
 # Только бот
-ENVIRONMENT=test uv run pytest tests/bot/ -v
+uv run pytest tests/bot/ -v
 
 # Только security-тесты
-ENVIRONMENT=test uv run pytest tests/unit/test_security.py -v
+uv run pytest tests/unit/test_security.py -v
 
 # С реальным LLM (требует API-ключ)
-ENVIRONMENT=local uv run pytest tests/ -m llm -v
+uv run pytest tests/ -m llm -v
 ```
 
 Postgres-тесты в `tests/chat/` автоматически пропускаются (`s`) если Docker недоступен.
@@ -333,7 +327,7 @@ Postgres-тесты в `tests/chat/` автоматически пропуска
 ### Прогон на golden dataset
 
 ```bash
-ENVIRONMENT=local uv run python eval/run_evaluation.py \
+uv run python eval/run_evaluation.py \
   --golden eval/golden_dataset.json \
   --judge  gpt-4o-mini \
   --out    eval/runs/$(date +%Y-%m-%d).json
@@ -345,7 +339,7 @@ ENVIRONMENT=local uv run python eval/run_evaluation.py \
 
 ```bash
 # Читает последний файл из eval/runs/, завершается с exit 1 при нарушении
-ENVIRONMENT=test uv run python eval/check_thresholds.py
+uv run python eval/check_thresholds.py
 ```
 
 Пороги задаются в `eval/thresholds.yaml`:
@@ -388,20 +382,20 @@ RPM = TPM_limit / avg_tokens_per_request
 
 **Подавить шум OTLP** (ускоряет каждый запрос на ~8 сек если коллектор не запущен):
 ```bash
-OTEL_TRACES_EXPORTER=none ENVIRONMENT=local uv run main.py
+OTEL_TRACES_EXPORTER=none uv run main.py
 ```
 
 ### Baseline (security отключена)
 
 ```bash
 # Терминал 1 — сервер без security-слоя
-ENVIRONMENT=local SECURITY_ENABLED=false uv run main.py
+SECURITY_ENABLED=false uv run main.py
 
 # Терминал 2 — throttle-прокси (:8001 → :8000), для Groq free tier --rpm 5
-ENVIRONMENT=local uv run python eval/security/throttle_proxy.py --rpm 5
+uv run python eval/security/throttle_proxy.py --rpm 5
 
 # Терминал 3 — garak
-ENVIRONMENT=local uv run garak \
+uv run garak \
   --target_type rest \
   -G eval/security/rest_config.json \
   --probes promptinject.HijackHateHumans,encoding.InjectBase64,dan.Ablation_Dan_11_0 \
@@ -413,13 +407,13 @@ ENVIRONMENT=local uv run garak \
 
 ```bash
 # Терминал 1 — сервер с security-слоем (по умолчанию)
-ENVIRONMENT=local uv run main.py
+uv run main.py
 
 # Терминал 2 — throttle-прокси
-ENVIRONMENT=local uv run python eval/security/throttle_proxy.py --rpm 20
+uv run python eval/security/throttle_proxy.py --rpm 20
 
 # Терминал 3 — те же probe-ы
-ENVIRONMENT=local uv run garak \
+uv run garak \
   --target_type rest \
   -G eval/security/rest_config.json \
   --probes promptinject.HijackHateHumans,encoding.InjectBase64,dan.Ablation_Dan_11_0 \
@@ -503,7 +497,7 @@ app/
   tools/            # handlers и схемы для function calling
   schemas/          # Pydantic-модели запросов и ответов
   observability/    # structlog + OpenTelemetry + PII-маскирование
-  settings/         # pydantic-settings, TOML + env
+  settings/         # pydantic-settings, .env + реальные env-переменные
     chat.py           # ChatSettings
     bot.py            # BotSettings
     moderation.py     # ModerationSettings
