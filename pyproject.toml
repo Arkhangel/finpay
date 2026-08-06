@@ -36,6 +36,13 @@ dependencies = [
     "docx2txt>=0.9",
     "llama-index-llms-openai-like>=0.7.2",
     "pymupdf>=1.28.0",
+    # Блок 6.3: ReAct-агент из agent_react.py (Б6.2) переносится на LangGraph.
+    # 1.x — API кардинально другой относительно 0.x (create_react_agent
+    # deprecated в пользу langchain.agents.create_agent), смешивать нельзя.
+    "langgraph>=1.0,<2",
+    "langchain>=1.0,<2",
+    "langchain-openai>=1.0",
+    "langchain-core>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -48,7 +55,11 @@ eval = [
     # langchain_community.chat_models.vertexai).
     "langchain-community<0.4",
     "pandas>=2",
-    "arize-phoenix>=5",
+    # <14: arize-phoenix>=17 импортирует MCPServerStreamableHTTP из
+    # pydantic_ai.mcp, которого нет в pydantic-ai-slim 2.25 (актуальная
+    # версия, тянется другими зависимостями проекта) — ImportError при
+    # первом импорте phoenix.session.session (проверено вживую, Б6.3).
+    "arize-phoenix>=5,<14",
     "arize-phoenix-evals<3",
     "rapidfuzz>=3.14.5",
 ]
