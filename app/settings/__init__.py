@@ -5,6 +5,7 @@ from functools import lru_cache
 from pydantic import SecretStr, ValidationError
 from pydantic_settings import SettingsConfigDict, BaseSettings, PydanticBaseSettingsSource, SettingsError
 
+from app.settings.agent import AgentSettings
 from app.settings.bot import BotSettings
 from app.settings.chat import ChatSettings
 from app.settings.embeddings import EmbeddingsSettings
@@ -30,6 +31,7 @@ class Settings(BaseSettings):
     bot: BotSettings = BotSettings()
     moderation: ModerationSettings = ModerationSettings()
     eval: EvalSettings = EvalSettings()
+    agent: AgentSettings = AgentSettings()
     cors_origins: list[str] = ["http://localhost:3000"]
 
     security_enabled: bool = True

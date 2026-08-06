@@ -27,7 +27,7 @@ from app.exceptions.handlers import setup_exception_handlers
 from app.lifespan import lifespan
 from app.admin import routes as admin_routes
 from app.chat import routes as chat_domain
-from app.routers import chat, documents, health, models, rag
+from app.routers import agent, chat, documents, health, models, rag
 from app.settings import settings
 from app.settings.logging import request_id_var
 
@@ -77,6 +77,7 @@ def create_app() -> FastAPI:
     app.include_router(documents.router)
     app.include_router(chat_domain.router)
     app.include_router(admin_routes.router)
+    app.include_router(agent.router)
 
     return app
 

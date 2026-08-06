@@ -13,12 +13,18 @@ services:
       CHAT__REPOSITORY: postgres
       CHAT__DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/finpay
       ADMIN_TOKEN: ${ADMIN_TOKEN}
+      BOT__TOKEN: ${BOT__TOKEN}
       BOT__BOT_URL: http://bot:9000
       BOT__INTERNAL_TOKEN: ${BOT__INTERNAL_TOKEN}
       HOST: 0.0.0.0
       PHOENIX_COLLECTOR_ENDPOINT: http://phoenix:4317
       QDRANT__URL: http://qdrant:6333
       QDRANT__API_KEY: ${QDRANT_API_KEY:-}
+      # Блок 6.4: persistent-граф — прод-режим на том же Postgres, что чат
+      # (М3Б5), новая БД не создаётся. AGENT__POSTGRES_URI — psycopg (v3)
+      # DSN, отдельный от CHAT__DATABASE_URL (тот — asyncpg, для SQLAlchemy).
+      AGENT__CHECKPOINTER: postgres
+      AGENT__POSTGRES_URI: postgresql://postgres:postgres@postgres:5432/finpay
     depends_on:
       redis:
         condition: service_healthy

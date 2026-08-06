@@ -10,6 +10,7 @@ from typing import Annotated
 
 import redis.asyncio as aioredis
 from fastapi import Depends, Request
+from langgraph.graph.state import CompiledStateGraph
 from openai import AsyncOpenAI
 
 from app.services.llm import LLMService
@@ -34,6 +35,10 @@ def get_rag_service(request: Request) -> RAGService | None:
     return request.app.state.rag_service
 
 
+def get_agent_graph(request: Request) -> CompiledStateGraph:
+    return request.app.state.agent_graph
+
+
 def get_canary(request: Request) -> str:
     return getattr(request.app.state, "canary", "")
 
@@ -50,3 +55,4 @@ CacheDep = Annotated[aioredis.Redis | None, Depends(get_cache)]
 CanaryDep = Annotated[str, Depends(get_canary)]
 VectorStoreDep = Annotated[VectorStore | None, Depends(get_vector_store)]
 RAGServiceDep = Annotated[RAGService | None, Depends(get_rag_service)]
+AgentGraphDep = Annotated[CompiledStateGraph, Depends(get_agent_graph)]

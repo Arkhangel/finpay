@@ -43,6 +43,13 @@ dependencies = [
     "langchain>=1.0,<2",
     "langchain-openai>=1.0",
     "langchain-core>=1.0",
+    # Блок 6.4: персистентность (checkpointer) + HIL для agent_persistent.py.
+    # aiosqlite обязателен явно — без него AsyncSqliteSaver молча не
+    # импортируется. Для AsyncPostgresSaver нужен psycopg v3, не psycopg2.
+    "langgraph-checkpoint-sqlite>=2.1",
+    "langgraph-checkpoint-postgres>=2.1",
+    "aiosqlite>=0.20",
+    "psycopg[binary,pool]>=3.2",
 ]
 
 [project.optional-dependencies]

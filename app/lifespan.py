@@ -11,6 +11,7 @@ from openai import AsyncOpenAI
 from qdrant_client import AsyncQdrantClient
 
 from app.observability.tracing import setup_tracing
+from app.services.agent_persistent import agent_lifespan, build_agent
 from app.services.rag import RAGService
 from app.services.vector_store import VectorStore
 from app.settings import settings
@@ -82,7 +83,13 @@ async def lifespan(app: FastAPI):
         logger.warning("RAG index unavailable — /rag/query disabled")
         app.state.rag_service = None
 
-    yield
+    # Блок 6.4: checkpointer.setup() вызывается ОДИН раз здесь (внутри
+    # agent_lifespan()), не на каждый запрос — см. docs/agent-persistent-report.md.
+    async with agent_lifespan() as checkpointer:
+        app.state.agent_graph = build_agent(checkpointer)
+        logger.info("Persistent agent graph ready: checkpointer=%s", settings.agent.checkpointer)
+
+        yield
 
     await app.state.openai.close()
     if app.state.cache:

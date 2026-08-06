@@ -22,6 +22,18 @@ target_metadata = Base.metadata
 # Override sqlalchemy.url from app settings so Alembic uses the same DB as the app.
 config.set_main_option("sqlalchemy.url", settings.chat.database_url)
 
+# Блок 6.4: LangGraph-чекпоинтер (AsyncPostgresSaver.setup()) ведёт свои
+# таблицы в этой же БД сам — они не в SQLAlchemy Base.metadata. Без
+# include_name autogenerate считает их "лишними" относительно
+# target_metadata и предлагает DROP TABLE при следующей ревизии.
+_CHECKPOINT_TABLES = {"checkpoints", "checkpoint_writes", "checkpoint_blobs", "checkpoint_migrations"}
+
+
+def include_name(name, type_, parent_names):  # noqa: ANN001, ANN201 — сигнатура фиксирована Alembic
+    if type_ == "table" and name in _CHECKPOINT_TABLES:
+        return False
+    return True
+
 
 def run_migrations_offline() -> None:
     url = config.get_main_option("sqlalchemy.url")
@@ -30,13 +42,14 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_name=include_name,
     )
     with context.begin_transaction():
         context.run_migrations()
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(connection=connection, target_metadata=target_metadata, include_name=include_name)
     with context.begin_transaction():
         context.run_migrations()
 
