@@ -6,6 +6,14 @@
 без генерации. Reranker принудительно отключается (service._reranker = None),
 чтобы измерить именно ту ветку, где top_score — сырой cosine similarity.
 
+Два уровня негативных примеров: EASY (максимально далёкие от домена темы —
+борщ, футбол, погода) и HARD (тематически соседние с FinPay — Stripe,
+ЮKassa, PCI DSS вообще, но не про FinPay). Вывод честный: easy отделяются от
+in-scope чисто, hard — пересекаются с in-scope диапазоном (см.
+docs/rag.md — "Threshold для отказа"). Порог 0.82 ловит только очевидный
+шум, не смысловую релевантность — это ожидаемый предел сырого cosine, не
+баг калибровки.
+
     ENVIRONMENT=local uv run scripts/calibrate_no_rerank_threshold.py
 """
 
@@ -26,7 +34,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # Заведомо не по теме FinPay — тот же класс вопросов, что и "борщ"/"футбол" в
 # docs/rag.md, для разнообразия тематик (еда, погода, спорт, общие факты).
-OUT_OF_SCOPE_QUESTIONS = [
+# "Лёгкие" негативы — максимально далеки от домена, ожидаемо низкий score.
+EASY_OUT_OF_SCOPE_QUESTIONS = [
     "Какой рецепт борща?",
     "Кто выиграл чемпионат мира по футболу в 2018 году?",
     "Какая завтра будет погода в Москве?",
@@ -35,6 +44,25 @@ OUT_OF_SCOPE_QUESTIONS = [
     "Какая столица Австралии?",
     "Посоветуй книгу для чтения на отпуск",
     "Как научиться играть на гитаре?",
+]
+
+# "Сложные" негативы — тематически СОСЕДНИЕ с FinPay (платежи/эквайринг/
+# комплаенс), но не про FinPay и не покрыты его базой знаний. Реальный
+# пограничный случай выглядит скорее так, а не как борщ — это и есть та
+# проверка, которую просил сделать пользователь после первой калибровки.
+HARD_OUT_OF_SCOPE_QUESTIONS = [
+    "Как настроить приём платежей через Stripe?",
+    "Какая комиссия у ЮKassa за приём платежей?",
+    "Как оспорить чарджбэк в PayPal?",
+    "Что такое PCI DSS и зачем он вообще нужен интернет-магазину?",
+    "Как открыть расчётный счёт в банке для ООО?",
+    "Какие требования 115-ФЗ к банкам при обслуживании юрлиц?",
+    "Как принять оплату криптовалютой через Coinbase Commerce?",
+    "Какой банк лучше выбрать для эквайринга интернет-магазина?",
+    "Как рассчитать НДС для интернет-магазина на УСН?",
+    "Как получить кредит для малого бизнеса в банке?",
+    "Как настроить вебхуки в Telegram Bot API?",
+    "Как защитить сайт интернет-магазина от DDoS-атак?",
 ]
 
 
@@ -46,44 +74,48 @@ async def main() -> None:
     service.build()
     service._reranker = None  # принудительно — измеряем ветку "reranker выключен"
 
-    try:
-        in_scope_scores: list[float] = []
-        print(f"=== In-scope ({len(in_scope_questions)} вопросов, tests/eval/golden_dataset.json) ===")
-        for q in in_scope_questions:
+    async def _scores(label: str, questions: list[str]) -> list[float]:
+        print(f"=== {label} ({len(questions)} вопросов) ===")
+        scores = []
+        for q in questions:
             result = await service.retrieve(q)
-            in_scope_scores.append(result["top_score"])
+            scores.append(result["top_score"])
             print(f"{result['top_score']:.4f}  {q}")
+        return scores
 
-        out_of_scope_scores: list[float] = []
-        print(f"\n=== Out-of-scope ({len(OUT_OF_SCOPE_QUESTIONS)} вопросов) ===")
-        for q in OUT_OF_SCOPE_QUESTIONS:
-            result = await service.retrieve(q)
-            out_of_scope_scores.append(result["top_score"])
-            print(f"{result['top_score']:.4f}  {q}")
+    def _report(label: str, scores: list[float]) -> None:
+        print(
+            f"{label:14s} min={min(scores):.4f} max={max(scores):.4f} "
+            f"median={statistics.median(scores):.4f}"
+        )
+
+    try:
+        in_scope_scores = await _scores(
+            "In-scope (tests/eval/golden_dataset.json)", in_scope_questions
+        )
+        easy_scores = await _scores("Easy out-of-scope", EASY_OUT_OF_SCOPE_QUESTIONS)
+        hard_scores = await _scores("Hard out-of-scope", HARD_OUT_OF_SCOPE_QUESTIONS)
+        all_negative_scores = easy_scores + hard_scores
 
         print("\n=== Статистика ===")
-        print(
-            f"in-scope:     min={min(in_scope_scores):.4f} max={max(in_scope_scores):.4f} "
-            f"median={statistics.median(in_scope_scores):.4f}"
-        )
-        print(
-            f"out-of-scope: min={min(out_of_scope_scores):.4f} max={max(out_of_scope_scores):.4f} "
-            f"median={statistics.median(out_of_scope_scores):.4f}"
-        )
+        _report("in-scope:", in_scope_scores)
+        _report("easy neg:", easy_scores)
+        _report("hard neg:", hard_scores)
+        _report("all neg:", all_negative_scores)
 
-        gap_low = max(out_of_scope_scores)
+        gap_low = max(all_negative_scores)
         gap_high = min(in_scope_scores)
         if gap_low < gap_high:
             candidate = round((gap_low + gap_high) / 2, 3)
             print(
-                f"\nЧистое разделение: max(out-of-scope)={gap_low:.4f} < "
+                f"\nЧистое разделение: max(все негативы)={gap_low:.4f} < "
                 f"min(in-scope)={gap_high:.4f}. Кандидат-порог (середина зазора): {candidate}"
             )
         else:
             print(
-                f"\nПересечение диапазонов: max(out-of-scope)={gap_low:.4f} >= "
-                f"min(in-scope)={gap_high:.4f} — чистого порога нет, см. распечатку выше "
-                "для ручного анализа."
+                f"\nПересечение диапазонов: max(все негативы)={gap_low:.4f} >= "
+                f"min(in-scope)={gap_high:.4f} — чистого порога нет, придётся выбирать "
+                "компромисс (баланс false positive/false negative) по распечатке выше."
             )
     finally:
         await service.aclose()
