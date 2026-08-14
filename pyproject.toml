@@ -50,6 +50,8 @@ dependencies = [
     "langgraph-checkpoint-postgres>=2.1",
     "aiosqlite>=0.20",
     "psycopg[binary,pool]>=3.2",
+    # Блок 6.5: supervisor-граф researcher+writer в experiments/.
+    "langgraph-supervisor>=0.0.31",
 ]
 
 [project.optional-dependencies]
