@@ -31,7 +31,7 @@ async def _get_or_init_chat(
 async def cmd_start(message: Message, state: FSMContext, backend: BackendClient) -> None:
     try:
         await _get_or_init_chat(message, state, backend)
-    except (httpx.ConnectError, httpx.ReadTimeout, httpx.HTTPStatusError) as exc:
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.HTTPStatusError) as exc:
         await message.answer(friendly_error(exc))
         return
     await message.answer(
@@ -66,7 +66,7 @@ async def cmd_clear(message: Message, state: FSMContext, backend: BackendClient)
     try:
         await backend.clear_messages(UUID(chat_id))
         await message.answer("История очищена. Начинаем с чистого листа ✨")
-    except (httpx.ConnectError, httpx.ReadTimeout, httpx.HTTPStatusError) as exc:
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.HTTPStatusError) as exc:
         await message.answer(friendly_error(exc))
 
 

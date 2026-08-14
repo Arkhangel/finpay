@@ -57,7 +57,7 @@ async def _send_media(
         )
         if result.get("message_id"):
             await sent.edit_reply_markup(reply_markup=feedback_kb(result["message_id"]))
-    except (httpx.ConnectError, httpx.ReadTimeout, httpx.HTTPStatusError) as exc:
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.HTTPStatusError) as exc:
         await message.answer(friendly_error(exc))
     except Exception:
         logger.exception("unexpected_error_in_media_handler")
@@ -90,7 +90,7 @@ async def handle_audio(message: Message, state: FSMContext, backend: BackendClie
 @router.message(
     F.document
     & F.document.file_name.func(lambda name: (name or "").lower().endswith((".pdf", ".docx")))
-    & F.document.file_size.func(lambda size: (size or 0) <= _MAX_DOCUMENT_BYTES)
+    & F.document.file_size.func(lambda size: size is not None and size <= _MAX_DOCUMENT_BYTES)
 )
 async def handle_document(message: Message, state: FSMContext, backend: BackendClient) -> None:
     data = await _download(message, message.document.file_id)

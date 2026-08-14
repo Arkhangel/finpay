@@ -106,12 +106,41 @@ async def execute_tool(state: AgentState) -> dict:
 
 
 async def prepare_send_telegram(state: AgentState) -> dict:
-    """Idempotent: только рендерит payload из уже сделанного моделью
-    tool_call. Никакого side-effect — безопасно перезапускать сколько угодно
-    раз (в т.ч. при resume, когда граф проигрывает узлы заново)."""
+    """Idempotent по отношению к send_telegram_message: рендерит его payload
+    из уже сделанного моделью tool_call, никакого side-effect по нему.
+
+    Модель может вызвать send_telegram_message не единственным tool_call'ом
+    за шаг (например, вместе с search_knowledge_base) — routing (см.
+    route_after_model) отправляет сюда весь batch целиком, а не только
+    опасный вызов. Остальные (безопасные) tool_calls в этой же пачке
+    выполняем сразу же, как execute_tool — иначе они остаются без
+    ToolMessage, и следующий вызов модели падает у провайдера с ошибкой про
+    неотвеченный tool_call (найдено global-аудитом вместе с фиксом
+    route_after_model)."""
     last = state["messages"][-1]
     call = next(tc for tc in last.tool_calls if tc["name"] == DANGEROUS_TOOL_NAME)
-    return {"pending_action": {"tool_call_id": call["id"], "args": call["args"]}}
+
+    by_name = {t.name: t for t in SAFE_TOOLS}
+    new_messages: list[AnyMessage] = []
+    new_results: list[dict] = []
+    for tc in last.tool_calls:
+        if tc["name"] == DANGEROUS_TOOL_NAME:
+            continue
+        if tc["name"] not in by_name:
+            content = f"Ошибка: нет инструмента '{tc['name']}'"
+        else:
+            try:
+                content = str(await by_name[tc["name"]].ainvoke(tc["args"]))
+            except Exception as exc:  # noqa: BLE001
+                content = f"Ошибка при вызове {tc['name']}: {exc}"
+        new_messages.append({"role": "tool", "content": content, "tool_call_id": tc["id"]})
+        new_results.append({"name": tc["name"], "args": tc["args"], "result": content})
+
+    return {
+        "messages": new_messages,
+        "tool_results": new_results,
+        "pending_action": {"tool_call_id": call["id"], "args": call["args"]},
+    }
 
 
 async def _send_real_telegram(chat_id: str, text: str) -> str:
@@ -140,7 +169,22 @@ async def confirm_and_execute_send_telegram(state: AgentState, config: RunnableC
     if not decision:
         result = "Отклонено пользователем — сообщение не отправлено."
     else:
-        result = await _send_real_telegram(payload["args"]["chat_id"], payload["args"]["text"])
+        # asyncio.shield + явный перехват CancelledError: если вызывающий
+        # запрос (SSE-клиент) обрывается ровно в момент отправки, реальный
+        # HTTP-вызов к Telegram всё равно долетает до конца, и узел всё равно
+        # фиксирует итоговый результат (pending_action=None). Без этого
+        # `except Exception` в _send_real_telegram не ловит CancelledError
+        # (это BaseException) — узел прерывается ДО записи результата, и
+        # повторный Command(resume=True) на том же thread_id заново вызывает
+        # этот же узел с нуля, отправляя сообщение в Telegram второй раз
+        # (найдено global-аудитом как воспроизводимая гонка, см.
+        # docs/agent-persistent-report.md).
+        try:
+            result = await asyncio.shield(
+                _send_real_telegram(payload["args"]["chat_id"], payload["args"]["text"])
+            )
+        except asyncio.CancelledError:
+            result = "Запрос клиента прервался, но отправка в Telegram успела завершиться."
 
     return {
         "messages": [{"role": "tool", "content": result, "tool_call_id": payload["tool_call_id"]}],
@@ -165,7 +209,12 @@ def route_after_model(state: AgentState) -> Literal["execute_tool", "prepare_sen
     last = state["messages"][-1]
     if not getattr(last, "tool_calls", None):
         return "force_finish"
-    if last.tool_calls[0]["name"] == DANGEROUS_TOOL_NAME:
+    # Проверяем ВСЕ tool_calls модели за этот шаг, не только первый (global-
+    # аудит): если модель вызвала search_knowledge_base и send_telegram_message
+    # в одном turn'е, опасный вызов не первым индексом раньше проваливался в
+    # execute_tool (которая знает только SAFE_TOOLS) и получал фейковую "нет
+    # такого инструмента" — вместо HIL-подтверждения.
+    if any(tc["name"] == DANGEROUS_TOOL_NAME for tc in last.tool_calls):
         return "prepare_send_telegram"
     return "execute_tool"
 

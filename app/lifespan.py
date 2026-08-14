@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 
 import redis.asyncio as aioredis
 from fastapi import FastAPI
@@ -34,6 +34,21 @@ async def lifespan(app: FastAPI):
         base_url=settings.openai.host or None,
         timeout=30,
         max_retries=3,
+    )
+
+    # Второй слой модерации (Moderation API) требует настоящего OpenAI, не
+    # Groq-клиента выше — см. app/settings/moderation.py. Строится один раз
+    # здесь (не на каждый запрос в get_moderation_service), только если слой
+    # реально включён.
+    app.state.moderation_openai_client = (
+        AsyncOpenAI(
+            api_key=settings.moderation.openai_api_key,
+            base_url=settings.moderation.openai_api_base or None,
+            timeout=10,
+            max_retries=1,
+        )
+        if settings.moderation.use_openai_api
+        else None
     )
 
     try:
@@ -85,13 +100,27 @@ async def lifespan(app: FastAPI):
 
     # Блок 6.4: checkpointer.setup() вызывается ОДИН раз здесь (внутри
     # agent_lifespan()), не на каждый запрос — см. docs/agent-persistent-report.md.
-    async with agent_lifespan() as checkpointer:
-        app.state.agent_graph = build_agent(checkpointer)
-        logger.info("Persistent agent graph ready: checkpointer=%s", settings.agent.checkpointer)
+    # AsyncExitStack, а не голый `async with agent_lifespan() as checkpointer:` —
+    # чтобы сбой чекпоинтера (например, недоступный Postgres) деградировал так
+    # же, как Redis/Qdrant/RAG выше (app.state.agent_graph = None, /agent/stream
+    # возвращает 503), а не ронял старт всего приложения целиком.
+    async with AsyncExitStack() as agent_stack:
+        try:
+            checkpointer = await agent_stack.enter_async_context(agent_lifespan())
+            app.state.agent_graph = build_agent(checkpointer)
+            logger.info("Persistent agent graph ready: checkpointer=%s", settings.agent.checkpointer)
+        except Exception:
+            logger.warning(
+                "Agent checkpointer unavailable (checkpointer=%s) — /agent/stream disabled",
+                settings.agent.checkpointer,
+            )
+            app.state.agent_graph = None
 
         yield
 
     await app.state.openai.close()
+    if app.state.moderation_openai_client:
+        await app.state.moderation_openai_client.close()
     if app.state.cache:
         await app.state.cache.aclose()
     if app.state.pg_engine:

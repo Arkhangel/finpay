@@ -85,7 +85,7 @@ async def chat_stream(req: ChatRequest, svc: LLMServiceDep, canary: CanaryDep) -
             if delta.usage:
                 yield f"data: {json.dumps({'usage': delta.usage.model_dump()})}\n\n"
             elif delta.content:
-                yield f"data: {delta.content}\n\n"
+                yield f"data: {json.dumps({'content': delta.content}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(generator(), media_type="text/event-stream")

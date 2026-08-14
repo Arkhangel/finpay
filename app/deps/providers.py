@@ -35,8 +35,8 @@ def get_rag_service(request: Request) -> RAGService | None:
     return request.app.state.rag_service
 
 
-def get_agent_graph(request: Request) -> CompiledStateGraph:
-    return request.app.state.agent_graph
+def get_agent_graph(request: Request) -> CompiledStateGraph | None:
+    return getattr(request.app.state, "agent_graph", None)
 
 
 def get_canary(request: Request) -> str:
@@ -55,4 +55,4 @@ CacheDep = Annotated[aioredis.Redis | None, Depends(get_cache)]
 CanaryDep = Annotated[str, Depends(get_canary)]
 VectorStoreDep = Annotated[VectorStore | None, Depends(get_vector_store)]
 RAGServiceDep = Annotated[RAGService | None, Depends(get_rag_service)]
-AgentGraphDep = Annotated[CompiledStateGraph, Depends(get_agent_graph)]
+AgentGraphDep = Annotated[CompiledStateGraph | None, Depends(get_agent_graph)]

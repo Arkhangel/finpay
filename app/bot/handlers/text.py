@@ -31,7 +31,7 @@ async def handle_text(
             )
             await state.update_data(backend_chat_id=str(cid))
             chat_id = str(cid)
-        except (httpx.ConnectError, httpx.ReadTimeout, httpx.HTTPStatusError) as exc:
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.HTTPStatusError) as exc:
             await message.answer(friendly_error(exc))
             return
 
@@ -41,7 +41,7 @@ async def handle_text(
         if result.get("message_id"):
             sources_cache.remember(result["message_id"], result.get("sources"))
             await sent.edit_reply_markup(reply_markup=feedback_kb(result["message_id"]))
-    except (httpx.ConnectError, httpx.ReadTimeout, httpx.HTTPStatusError) as exc:
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.HTTPStatusError) as exc:
         await message.answer(friendly_error(exc))
     except Exception:
         logger.exception("unexpected_error_in_text_handler")

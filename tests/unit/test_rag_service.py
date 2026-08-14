@@ -120,6 +120,28 @@ async def test_reranker_not_called_when_disabled(rag_settings):
     assert len(result["sources"]) == 1
 
 
+async def test_score_guard_uses_no_rerank_threshold_when_reranker_disabled(rag_settings, monkeypatch):
+    """global-аудит: score_threshold (rerank-калибровка, продакшен-дефолт
+    0.005) почти всегда true для сырого cosine similarity — без reranker'а
+    top_score должен сравниваться со score_threshold_no_rerank (0.75), иначе
+    guard молча становится no-op."""
+    from app.settings import settings as app_settings
+
+    monkeypatch.setattr(app_settings.rag, "score_threshold", 0.005)
+    monkeypatch.setattr(app_settings.rag, "score_threshold_no_rerank", 0.75)
+
+    nodes = [_node("нерелевантный текст", 0.02, source="01_off_topic.md")]
+    mock_llm = _mock_llm("не должно вызваться")
+    service = _make_service(rag_settings, reranker=None, llm=mock_llm)
+    service._index = _mock_index(nodes)
+
+    result = await service.answer("вопрос не по теме")
+
+    mock_llm.achat.assert_not_called()
+    assert result["answer"] == REFUSAL_ANSWER
+    assert result["confident"] is False
+
+
 async def test_answer_before_build_raises() -> None:
     service = RAGService.__new__(RAGService)
     service._index = None

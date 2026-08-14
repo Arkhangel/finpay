@@ -98,6 +98,24 @@ class JsonChatRepository:
         # Return last N in chronological order
         return messages[-limit:]
 
+    async def message_exists(self, chat_id: UUID, message_id: UUID) -> bool:
+        path = self._messages_path(chat_id)
+        try:
+            async with aiofiles.open(path) as f:
+                lines = await f.readlines()
+        except (FileNotFoundError, OSError):
+            return False
+
+        target = str(message_id)
+        for line in lines:
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if obj.get("id") == target:
+                return True
+        return False
+
     async def soft_delete_messages(self, chat_id: UUID) -> None:
         path = self._messages_path(chat_id)
         await aiofiles.os.makedirs(path.parent, exist_ok=True)

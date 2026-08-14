@@ -46,6 +46,23 @@ async def test_broadcast_worker_acks_failed_when_all_sends_fail():
     backend.ack_broadcast.assert_awaited_once_with("b1", "failed")
 
 
+async def test_broadcast_worker_acks_partial_when_some_sends_fail():
+    bot = MagicMock()
+    bot.send_message = AsyncMock(side_effect=[None, RuntimeError("telegram down")])
+
+    backend = MagicMock()
+    backend.get_pending_broadcasts = AsyncMock(
+        return_value=[{"id": "b1", "message": "hi", "targets": [111, 222]}]
+    )
+    backend.ack_broadcast = AsyncMock()
+
+    with patch("app.bot.services.broadcast.asyncio.sleep", side_effect=asyncio_cancel_after_first()):
+        with pytest.raises(RuntimeError, match="stop-loop"):
+            await run_broadcast_worker(bot, backend)
+
+    backend.ack_broadcast.assert_awaited_once_with("b1", "partial")
+
+
 async def test_broadcast_worker_survives_poll_error():
     bot = MagicMock()
     backend = MagicMock()

@@ -54,6 +54,9 @@ def fit_to_budget(messages: list[dict[str, Any]], budget: int) -> list[dict[str,
     system_tokens = count_tokens(system_msgs)
     remaining = budget - system_tokens
 
+    if not non_system:
+        return system_msgs
+
     result: list[dict[str, Any]] = []
     # Walk from the end so we keep the most recent messages
     for msg in reversed(non_system):
@@ -62,6 +65,18 @@ def fit_to_budget(messages: list[dict[str, Any]], budget: int) -> list[dict[str,
             break
         result.insert(0, msg)
         remaining -= msg_tokens
+
+    if not result:
+        # Даже самое последнее (текущее) сообщение не влезло в остаток бюджета —
+        # это гарантированно последний элемент non_system (текущий вопрос
+        # пользователя, всегда добавляется последним перед вызовом
+        # fit_to_budget). Отдать его всё равно лучше, чем уйти в LLM без
+        # единого user-сообщения — усечение вместо полного выпадения турна.
+        logger.warning(
+            "fit_to_budget_current_turn_exceeds_budget tokens=%d remaining=%d",
+            count_tokens([non_system[-1]]), remaining,
+        )
+        result = [non_system[-1]]
 
     return system_msgs + result
 

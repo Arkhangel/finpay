@@ -31,7 +31,7 @@ async def handle_feedback(callback: CallbackQuery, state: FSMContext, backend: B
 
     try:
         await backend.submit_feedback(UUID(chat_id), message_id, vote, sources=sources)
-    except (httpx.ConnectError, httpx.ReadTimeout, httpx.HTTPStatusError) as exc:
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.HTTPStatusError) as exc:
         await callback.answer(friendly_error(exc), show_alert=True)
         return
     except Exception:

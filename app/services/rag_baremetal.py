@@ -135,7 +135,11 @@ class RAGBaremetalService:
             for r in results
         ]
 
-        if top_score < rag.score_threshold:
+        # Здесь top_score всегда сырой cosine similarity — re-ranker'а нет
+        # вообще, поэтому нужен score_threshold_no_rerank, а не
+        # rerank-калиброванный score_threshold (иначе guard — no-op, см.
+        # RagSettings.score_threshold_no_rerank и global-аудит).
+        if top_score < rag.score_threshold_no_rerank:
             return {"answer": _FALLBACK_ANSWER, "top_score": round(top_score, 3), "sources": sources}
 
         context = "\n\n---\n\n".join(f"[{r.payload['file_name']}]\n{r.payload['text']}" for r in results)

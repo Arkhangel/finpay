@@ -81,6 +81,14 @@ class PostgresChatRepository:
         messages = [ChatMessage.model_validate(row, from_attributes=True) for row in reversed(rows)]
         return messages
 
+    async def message_exists(self, chat_id: UUID, message_id: UUID) -> bool:
+        result = await self._session.execute(
+            select(ChatMessageRow.id).where(
+                ChatMessageRow.id == message_id, ChatMessageRow.chat_id == chat_id
+            )
+        )
+        return result.scalar_one_or_none() is not None
+
     async def soft_delete_messages(self, chat_id: UUID) -> None:
         now = datetime.now(timezone.utc)
         await self._session.execute(

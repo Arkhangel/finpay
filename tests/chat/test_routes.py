@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from contextlib import asynccontextmanager
 from unittest.mock import MagicMock, patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+
+from app.chat.domain import ChatMessage
 
 
 @asynccontextmanager
@@ -26,7 +29,7 @@ async def _noop_lifespan(app):
 @pytest.fixture
 def client(tmp_path):
     from app.main import create_app
-    from app.chat.deps import get_chat_service
+    from app.chat.deps import get_chat_service, get_repository
     from app.chat.service import ChatService
     from app.chat.repositories.json_repo import JsonChatRepository
 
@@ -37,9 +40,23 @@ def client(tmp_path):
         app = create_app()
 
     app.dependency_overrides[get_chat_service] = lambda: svc
+    # submit_feedback берёт ChatRepositoryDep отдельно от svc — без этого
+    # override он резолвился бы через настоящий get_repository() и писал бы
+    # в реальный settings.chat.storage_dir (./var), а не в tmp_path (найдено
+    # при добавлении проверки message_exists ниже).
+    app.dependency_overrides[get_repository] = lambda: repo
 
     with TestClient(app) as c:
+        c.repo = repo
         yield c
+
+
+def _add_message(client, chat_id: str, role: str = "assistant") -> UUID:
+    """Feedback теперь требует существующего message_id (global-аудит) —
+    хелпер кладёт сообщение напрямую в JSON-репозиторий, минуя LLM-стриминг."""
+    msg = ChatMessage(chat_id=UUID(chat_id), role=role, content="test")
+    asyncio.run(client.repo.append_message(UUID(chat_id), msg))
+    return msg.id
 
 
 def test_create_chat(client):
@@ -272,7 +289,7 @@ def test_submit_feedback_is_recorded(client):
     chat_id = client.post(
         "/chats", json={"owner_external_id": "user-1", "interface": "cli"}
     ).json()["chat_id"]
-    message_id = uuid4()
+    message_id = _add_message(client, chat_id)
 
     resp = client.post(
         f"/chats/{chat_id}/messages/{message_id}/feedback", json={"value": "up"}
@@ -286,7 +303,7 @@ def test_submit_feedback_duplicate_is_not_recorded_twice(client):
     chat_id = client.post(
         "/chats", json={"owner_external_id": "user-1", "interface": "cli"}
     ).json()["chat_id"]
-    message_id = uuid4()
+    message_id = _add_message(client, chat_id)
 
     first = client.post(
         f"/chats/{chat_id}/messages/{message_id}/feedback", json={"value": "up"}
@@ -303,6 +320,20 @@ def test_submit_feedback_unknown_chat_returns_404(client):
     resp = client.post(
         f"/chats/{uuid4()}/messages/{uuid4()}/feedback", json={"value": "up"}
     )
+    assert resp.status_code == 404
+
+
+def test_submit_feedback_unknown_message_returns_404(client):
+    """global-аудит: message_id, никогда не принадлежавший чату, раньше тихо
+    принимался JSON-репозиторием и падал 500 (IntegrityError) на Postgres."""
+    chat_id = client.post(
+        "/chats", json={"owner_external_id": "user-1", "interface": "cli"}
+    ).json()["chat_id"]
+
+    resp = client.post(
+        f"/chats/{chat_id}/messages/{uuid4()}/feedback", json={"value": "up"}
+    )
+
     assert resp.status_code == 404
 
 

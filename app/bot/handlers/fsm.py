@@ -68,7 +68,7 @@ async def fsm_question_received(
             )
             await state.update_data(backend_chat_id=str(cid))
             chat_id = str(cid)
-        except (httpx.ConnectError, httpx.ReadTimeout, httpx.HTTPStatusError) as exc:
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.HTTPStatusError) as exc:
             await state.clear()
             await message.answer(friendly_error(exc))
             return
@@ -80,7 +80,7 @@ async def fsm_question_received(
         sent = await stream_to_chat(message, backend.send_message(UUID(chat_id), prompt, result=result))
         if result.get("message_id"):
             await sent.edit_reply_markup(reply_markup=feedback_kb(result["message_id"]))
-    except (httpx.ConnectError, httpx.ReadTimeout, httpx.HTTPStatusError) as exc:
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.HTTPStatusError) as exc:
         await message.answer(friendly_error(exc))
     except Exception:
         logger.exception("unexpected_error_in_fsm_question_handler")

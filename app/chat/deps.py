@@ -18,15 +18,22 @@ def get_openai_client(request: Request) -> AsyncOpenAI:
     return request.app.state.openai
 
 
+def get_moderation_openai_client(request: Request) -> AsyncOpenAI | None:
+    # НЕ get_openai_client — тот указывает на Groq (settings.openai.host),
+    # а Moderation API — проприетарный эндпоинт настоящего OpenAI, которого
+    # на Groq нет (global-аудит, находка №3; см. app/settings/moderation.py).
+    return getattr(request.app.state, "moderation_openai_client", None)
+
+
 def get_moderation_service(
-    llm: Annotated[AsyncOpenAI, Depends(get_openai_client)],
+    moderation_client: Annotated[AsyncOpenAI | None, Depends(get_moderation_openai_client)],
 ) -> ModerationService | None:
     if not settings.moderation.enabled:
         return None
     return ModerationService(
         keywords_path=settings.moderation.keywords_path,
         use_openai_api=settings.moderation.use_openai_api,
-        openai_client=llm,
+        openai_client=moderation_client,
         category_thresholds=settings.moderation.category_thresholds,
     )
 

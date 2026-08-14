@@ -57,7 +57,7 @@ class AdminRepository:
                 select(
                     func.count().filter(MessageFeedbackRow.value == "up").label("up"),
                     func.count().label("total"),
-                )
+                ).where(MessageFeedbackRow.created_at >= _LAST_24H)
             )
         ).one()
 

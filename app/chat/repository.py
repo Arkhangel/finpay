@@ -20,6 +20,11 @@ class ChatRepository(Protocol):
 
     async def list_messages(self, chat_id: UUID, limit: int = 50) -> list[ChatMessage]: ...
 
+    async def message_exists(self, chat_id: UUID, message_id: UUID) -> bool:
+        """True if message_id belongs to chat_id — used to validate feedback
+        before it hits save_feedback (см. app/chat/routes.py::submit_feedback)."""
+        ...
+
     async def soft_delete_messages(self, chat_id: UUID) -> None: ...
 
     async def save_feedback(

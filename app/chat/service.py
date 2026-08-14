@@ -25,6 +25,14 @@ _MAX_HISTORY_TOKENS = _CONTEXT_WINDOW - _RESPONSE_TOKENS - _SAFETY_MARGIN
 
 _BLOCKED_OUTPUT_MESSAGE = "Не могу показать ответ — он мог нарушить правила"
 
+# Раньше check_output вызывался только ПОСЛЕ полного завершения стрима — блокировка
+# была чисто постфактум-записью в БД, а не реальной защитой (весь ответ уже был
+# отдан клиенту токен за токеном, global-аудит). Проверяем накопленный буфер
+# порциями по ходу стрима — не идеально (кусок внутри одного интервала всё ещё
+# может проскочить до срабатывания), но останавливает доставку значительно раньше
+# конца ответа, а не после него.
+_MODERATION_CHECK_INTERVAL_CHARS = 200
+
 # Сколько последних сообщений истории отдаётся LLM для condense-переписывания
 # follow-up в самостоятельный вопрос — окно короче основного контекста, это
 # разовый дешёвый вызов только ради retrieval, не ради ответа пользователю.
@@ -181,6 +189,8 @@ class ChatService:
         model = settings.openai.model
         full_response = ""
         stream_broken = False
+        blocked_mid_stream = False
+        unchecked_chars = 0
         started_at = time.monotonic()
 
         try:
@@ -194,9 +204,25 @@ class ChatService:
                     if not chunk.choices:
                         continue
                     delta = chunk.choices[0].delta.content
-                    if delta:
-                        full_response += delta
-                        yield delta
+                    if not delta:
+                        continue
+                    full_response += delta
+                    unchecked_chars += len(delta)
+
+                    if (
+                        self._moderation is not None
+                        and unchecked_chars >= _MODERATION_CHECK_INTERVAL_CHARS
+                    ):
+                        unchecked_chars = 0
+                        mod_result = await self._moderation.check_output(full_response)
+                        if not mod_result.allowed:
+                            blocked_mid_stream = True
+                            await self._repo.record_moderation_incident(
+                                chat_id, "output", mod_result.blocked_by, mod_result.categories
+                            )
+                            break
+
+                    yield delta
         except Exception as exc:
             stream_broken = True
             logger.warning("stream_interrupted content_so_far=%d chars error=%s", len(full_response), exc)
@@ -204,9 +230,14 @@ class ChatService:
         finally:
             if full_response:
                 persist_content = full_response
+                if blocked_mid_stream:
+                    persist_content = _BLOCKED_OUTPUT_MESSAGE
+                    yield _BLOCKED_OUTPUT_MESSAGE
                 # Проверяем только чистое завершение стрима: при обрыве текст неполный,
                 # а токены уже отданы клиенту — переретроактивно скрыть их нельзя.
-                if not stream_broken and self._moderation is not None:
+                # Финальный "хвост" короче _MODERATION_CHECK_INTERVAL_CHARS мог не
+                # попасть ни под одну периодическую проверку выше — досматриваем его здесь.
+                elif not stream_broken and self._moderation is not None:
                     mod_result = await self._moderation.check_output(full_response)
                     if not mod_result.allowed:
                         await self._repo.record_moderation_incident(

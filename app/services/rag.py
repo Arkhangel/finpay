@@ -134,11 +134,18 @@ class RAGService:
         retriever = self._index.as_retriever(similarity_top_k=rag.similarity_top_k)
         nodes: list[NodeWithScore] = await retriever.aretrieve(question)
 
-        if self._reranker is not None and nodes:
+        reranked = bool(self._reranker is not None and nodes)
+        if reranked:
             nodes = self._reranker.rerank(question, nodes, top_n=rag.rerank_top_n)
 
+        # score_threshold откалиброван под шкалу CrossEncoder (после
+        # re-ranking) — сырой cosine similarity retrieval (когда reranker
+        # выключен) на другой шкале, к нему нужен отдельный порог, иначе
+        # guard всегда true независимо от релевантности (global-аудит,
+        # см. RagSettings.score_threshold_no_rerank).
+        threshold = rag.score_threshold if reranked else rag.score_threshold_no_rerank
         top_score = nodes[0].score if nodes and nodes[0].score is not None else 0.0
-        confident = top_score >= rag.score_threshold
+        confident = top_score >= threshold
 
         sources = [
             {
@@ -154,7 +161,7 @@ class RAGService:
         if not confident:
             logger.info(
                 "rag_score_guard_triggered",
-                extra={"top_score": round(top_score, 3), "threshold": rag.score_threshold},
+                extra={"top_score": round(top_score, 3), "threshold": threshold, "reranked": reranked},
             )
 
         return {

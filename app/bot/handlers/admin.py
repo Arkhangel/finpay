@@ -14,7 +14,7 @@ from app.settings import settings
 router = Router()
 logger = logging.getLogger(__name__)
 
-_BACKEND_ERRORS = (httpx.ConnectError, httpx.ReadTimeout, httpx.HTTPStatusError)
+_BACKEND_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.HTTPStatusError)
 
 
 class IsAdmin(BaseFilter):

@@ -144,6 +144,12 @@ async def submit_feedback(
     if chat is None:
         raise HTTPException(status_code=404, detail="Chat not found")
 
+    # global-аудит: раньше message_id не проверялся вообще — JSON-бэкенд тихо
+    # принимал фидбек на несуществующее/чужое сообщение, а Postgres ронял
+    # необработанный IntegrityError (FK message_id -> chat_messages.id) в 500.
+    if not await repo.message_exists(chat_id, message_id):
+        raise HTTPException(status_code=404, detail="Message not found in this chat")
+
     created = await feedback.save_feedback(
         repo, message_id, chat.owner_external_id, body.value, body.sources
     )

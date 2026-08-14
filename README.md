@@ -92,7 +92,8 @@ uv run main.py
 | `QDRANT__COLLECTION` | `documents` | Legacy-коллекция (Б5.2); прод использует `RAG__KB_COLLECTION=finpay_kb` |
 | `EMBEDDINGS__DIM` | `768` | Размерность вектора (`intfloat/multilingual-e5-base`) |
 | `RAG__RERANKER_ENABLED` | `true` | BAAI/bge-reranker-v2-m3 после retrieval |
-| `RAG__SCORE_THRESHOLD` | `0.005` | Порог "не найдено" после re-ranking |
+| `RAG__SCORE_THRESHOLD` | `0.005` | Порог "не найдено" после re-ranking (шкала CrossEncoder) |
+| `RAG__SCORE_THRESHOLD_NO_RERANK` | `0.82` | Тот же порог, но для сырого cosine similarity — когда re-ranker выключен/недоступен (другая шкала); откалиброван вживую на `finpay_kb`, см. `docs/rag.md` |
 | `AGENT__CHECKPOINTER` | `sqlite` | `memory` (тесты) \| `sqlite` (локально) \| `postgres` (прод) |
 | `AGENT__POSTGRES_URI` | `postgresql://postgres:postgres@localhost:5433/finpay` | psycopg (v3) DSN для чекпоинтера — НЕ `CHAT__DATABASE_URL` |
 | `CORS_ORIGINS` | `["http://localhost:3000"]` | Разрешённые origin для REST API |
@@ -100,6 +101,7 @@ uv run main.py
 | `ADMIN_TOKEN` | — | Секрет `/chats/admin/*` |
 | `MODERATION__ENABLED` | `true` | Keyword-модерация (всегда дёшево включена) |
 | `MODERATION__USE_OPENAI_API` | `false` | Второй слой — `omni-moderation-latest` |
+| `MODERATION__OPENAI_API_KEY` | — | Настоящий OpenAI-ключ для второго слоя (не Groq — `/moderations` там не работает, см. `docs/final-decisions.md`) |
 | `EVAL__TESTSET_LLM_API_KEY` | — | Настоящий OpenAI-ключ, только для `scripts/generate_testset.py` |
 
 Полный и всегда актуальный список — `.env.example` (значения-заглушки вместо
@@ -273,15 +275,19 @@ curl -X POST http://localhost:8000/rag/query \
 внешний side-effect), поэтому единственный, требующий подтверждения
 пользователя перед выполнением.
 
+Эндпоинт требует `X-Admin-Token` (тот же секрет, что и `/chats/admin/*`) —
+даёт прямой доступ к подтверждению реальной отправки в Telegram, анонимный
+доступ недопустим (global-аудит).
+
 ```bash
 # SSE-стрим агента с HIL
 curl -N -X POST http://localhost:8000/agent/stream \
-  -H 'Content-Type: application/json' \
+  -H 'Content-Type: application/json' -H 'X-Admin-Token: ...' \
   -d '{"thread_id":"demo-1","input":{"messages":[{"role":"user","content":"Отправь клиенту в чат 123 сводку по тарифам"}]}}'
 
 # После получения __interrupt__ в потоке — подтверждение тем же thread_id
 curl -N -X POST http://localhost:8000/agent/stream \
-  -d '{"thread_id":"demo-1","input":{"resume":true}}'
+  -H 'X-Admin-Token: ...' -d '{"thread_id":"demo-1","input":{"resume":true}}'
 ```
 
 Отчёты по каждому шагу с реальными числами (latency/токены/баги, найденные
@@ -528,6 +534,31 @@ Postgres-тесты автоматически пропускаются (`s`) е
   конкретный запрос); агентные `/agent/stream`-вызовы — сетевые ошибки от
   `httpx`/`openai` пробрасываются наверх без отдельного retry-слоя поверх
   встроенных ретраев SDK.
+- **Дублирующая отправка в Telegram при обрыве клиента во время HIL-отправки**
+  — было воспроизводимой гонкой (см. `docs/agent-persistent-report.md`),
+  теперь смягчено через `asyncio.shield` + перехват `CancelledError` в
+  `confirm_and_execute_send_telegram`: реальный вызов Telegram API всегда
+  либо успевает завершиться и зафиксироваться в состоянии графа, либо не
+  начинается вовсе. Это не формальная гарантия ровно-одной доставки (нет
+  внешнего idempotency-key на стороне Telegram Bot API), но закрывает
+  конкретный обнаруженный сценарий гонки.
+- **Второй слой модерации (`MODERATION__USE_OPENAI_API`) требует отдельного
+  настоящего OpenAI-ключа** (`MODERATION__OPENAI_API_KEY`) — раньше был
+  тихо привязан к тому же клиенту, что и продакшен-LLM (Groq), и просто не
+  работал бы при включении (Groq не отдаёт `/moderations`). По умолчанию
+  выключен; всегда включённый keyword-слой в этом не нуждается и денег не
+  стоит.
+
+Все 20 находок предыдущего global-аудита кода (аутентификация
+`/agent/stream`, модерация `/rag/query` и `/agent/stream`, `.dockerignore`,
+скейл score-guard'а (включая калибровку `RAG__SCORE_THRESHOLD_NO_RERANK` на
+реальном `finpay_kb`), гонка при HIL-отправке, некорректный routing на
+multi-tool-call шагах, деградация чекпоинтера, экранирование SSE, обрезание
+текущего сообщения бюджетом токенов, `doc_id`-коллизии при переиндексации,
+таймауты бота, статистика фидбека без временного фильтра, частичные сбои
+рассылки, фидбек на несуществующее сообщение, timing-атака на токены) —
+исправлены и покрыты тестами (либо, для калибровки, измерены вживую без
+Groq — см. `docs/rag.md`).
 
 ## Структура проекта
 
