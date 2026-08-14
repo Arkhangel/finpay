@@ -131,45 +131,6 @@ flowchart LR
 
 ---
 
-## LiteLLM Gateway
-
-### Выбор: берём LiteLLM
-
-LiteLLM Proxy предоставляет готовый OpenAI-совместимый эндпоинт с маршрутизацией
-между провайдерами, retry-with-backoff, fallback chain и метриками из коробки.
-Альтернатива — написать собственный роутер на базе `aiobreaker` + `tenacity` (≈200 строк).
-
-**Решение: используем LiteLLM**. Обоснование:
-- Fallback chain и Circuit Breaker декларируются в `config.yaml` без кода.
-- Прозрачная смена провайдера: `client.py` не меняется — только URL и ключ.
-- Встроенные метрики (Prometheus) подключаются в Б3.6 без дополнительного кода.
-- При необходимости полного контроля (кастомный retry, бизнес-логика fallback)
-  переход на собственный роутер возможен без изменения API клиента.
-
-Конфиг: [`docs/litellm/config.yaml`](litellm/config.yaml)
-
-### Локальный запуск
-
-```bash
-uv add 'litellm[proxy]'
-litellm --config docs/litellm/config.yaml
-# → http://localhost:4000/v1/chat/completions
-```
-
-Тест переключения (сэмулировать падение primary — неверный ключ в `GROQ_API_KEY`):
-
-```bash
-curl http://localhost:4000/v1/chat/completions \
-  -H "Authorization: Bearer sk-finpay-local" \
-  -H "Content-Type: application/json" \
-  -d '{"model": "finpay-chat", "messages": [{"role": "user", "content": "Статус TXN-1001?"}]}'
-```
-
-При неверном `GROQ_API_KEY` LiteLLM автоматически переключится на `openai-fallback`
-(видно в логах прокси: `LiteLLM: Trying model=openai-fallback`).
-
----
-
 ## ADR-003: Выбор embedding-модели (М5.1)
 
 **Context.**

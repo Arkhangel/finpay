@@ -2,7 +2,7 @@
 
 Коллекция `documents` в Qdrant хранит эмбеддинги базы знаний FinPay — 118
 чанков (см. `scripts/load_to_qdrant.py::build_documents`) из `service_facts.j2`,
-`eval/golden_dataset.json`, tool-доков, `docs/chat.md`, `docs/architecture.md`,
+`tests/eval/golden_dataset.json`, tool-доков, `docs/chat.md`, `docs/architecture.md`,
 `README.md`, плюс одна намеренно сконструированная демо-пара active/archived
 тарифа для раздела «Фильтрация» ниже. Векторы — `intfloat/multilingual-e5-base`
 (768 измерений, self-hosted, см. ADR-003 в `docs/architecture.md`).

@@ -111,14 +111,18 @@ def load_service_facts() -> list[dict]:
 
 
 def load_golden_dataset() -> list[dict]:
-    data = json.loads((ROOT / "eval/golden_dataset.json").read_text(encoding="utf-8"))
+    # Б5.6 переложил golden dataset в tests/eval/golden_dataset.json с другой
+    # схемой (плоский список user_input/reference/reference_contexts/source,
+    # без items/question/expected_answer/category) — старый eval/golden_dataset.json
+    # удалён вместе с ранним, вытесненным G-Eval harness'ом.
+    data = json.loads((ROOT / "tests/eval/golden_dataset.json").read_text(encoding="utf-8"))
     docs = []
-    for item in data["items"]:
+    for i, item in enumerate(data):
         docs.append(
             {
-                "source": f"golden_dataset#{item['id']}",
-                "text": f"{item['question']}\n{item['expected_answer']}",
-                "category": item["category"],
+                "source": f"golden_dataset#{i}",
+                "text": f"{item['user_input']}\n{item['reference']}",
+                "category": item.get("source", "golden_dataset"),
                 "access_level": "public",
                 "status": "active",
                 "created_at": _now_iso(),

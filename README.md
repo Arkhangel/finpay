@@ -232,7 +232,7 @@ uv run main.py rest
 `app/services/rag_baremetal.py` (сравнение — `docs/rag.md`).
 
 **Корпус** — `data/<категория>/` (tariffs, support, security, api, webhooks,
-legal, compliance, onboarding, incidents, integrations), ~22 документа →
+legal, compliance, onboarding, incidents, integrations), 42 документа →
 коллекция Qdrant `finpay_kb`. Индексация — `scripts/ingest.py`
 (`IngestionPipeline` + `DocstoreStrategy.UPSERTS`, идемпотентно: повторный
 запуск не плодит дубликаты, определяет изменённые/неизменные документы по
@@ -308,29 +308,19 @@ baseline на одинаковых 5 вопросах и одном tool — `ex
 
 ## Оценка качества (eval)
 
-Два независимых уровня, не путать:
-
-**Качество RAG (RAGAS), актуальный отчёт** — `tests/eval/golden_dataset.json`
-(36 вопросов, вручную проверенных на дословное соответствие корпусу) +
-`scripts/run_eval.py` (Faithfulness/AnswerRelevancy/ContextPrecision/
-ContextRecall/`has_citation`, судья — отдельная от прод модель через Groq).
-Полный разбор методологии, найденных багов (14 штук) и отклонений от
-задания — [`docs/rag_evaluation.md`](docs/rag_evaluation.md). **Честно**: на
-момент этого README прогон не завершён (упирались в дневную квоту Groq) —
-итоговые числа по всем 36 строкам и обоим A/B-экспериментам (chunking,
-reranker on/off) — открытый пункт, см. «Ограничения» ниже.
+Качество RAG оценивается через RAGAS на golden dataset —
+`tests/eval/golden_dataset.json` (36 вопросов, каждый вручную сверен на
+дословное соответствие корпусу) и `scripts/run_eval.py`
+(Faithfulness/AnswerRelevancy/ContextPrecision/ContextRecall/`has_citation`,
+судья — отдельная от продакшена модель через Groq). Методология, 14 найденных
+по ходу багов и отклонения от задания разобраны в
+[`docs/rag_evaluation.md`](docs/rag_evaluation.md). На момент этого README
+прогон не завершён — упёрлись в дневную квоту Groq, итоговые числа по всем 36
+строкам и обоим A/B-экспериментам (chunking, reranker on/off) остаются
+открытым пунктом, см. «Ограничения» ниже.
 
 ```bash
 uv run scripts/run_eval.py --label baseline
-```
-
-**Общий G-Eval harness (ранний, не RAG-специфичный)** — `eval/` (блок ~3-4):
-
-```bash
-uv run python eval/run_evaluation.py \
-  --golden eval/golden_dataset.json --judge gpt-4o-mini \
-  --out eval/runs/$(date +%Y-%m-%d).json
-uv run python eval/check_thresholds.py   # CI-порог, eval/thresholds.yaml
 ```
 
 ## Наблюдаемость
@@ -582,7 +572,7 @@ alembic/versions/    # миграции: chat-таблицы, media_refs, modera
                      # (checkpoint*-таблицы Б6.4 создаёт AsyncPostgresSaver.setup(), не Alembic —
                      #  alembic/env.py::include_name явно исключает их из autogenerate)
 
-eval/                # ранний G-Eval harness (не RAG-специфичный) + throttle_proxy для garak
+eval/security/       # throttle_proxy.py + rest_config.json для garak (единственное, что осталось от раннего eval/)
 tests/
   unit/, chat/, admin/, bot/, integration/   # по модулям
   eval/                                       # golden_dataset.json (36 Б5.6), mini_benchmark.json (М5.1)
