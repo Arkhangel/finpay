@@ -1,7 +1,40 @@
 # FinPay — AI-ассистент техподдержки
 
-FastAPI-сервис на базе LLM для поддержки платёжного процессинга.
-Поддерживает function calling, кеширование ответов в Redis, observability через OpenTelemetry и security-слой с защитой от prompt injection.
+FastAPI-сервис на базе LLM для поддержки платёжного процессинга: RAG по
+корпоративной базе знаний с цитированием источников, агент с function
+calling (включая human-in-the-loop подтверждение опасных действий),
+персистентность между рестартами, наблюдаемость через OpenTelemetry и
+security-слой с защитой от prompt injection.
+
+## Архитектура
+
+```mermaid
+flowchart LR
+    U["Пользователь\n(Telegram / REST)"] --> BOT["bot (aiogram)"]
+    U --> API["app (FastAPI)"]
+    BOT -->|"BackendClient"| API
+    API --> MOD["Модерация\n(keyword + опц. OpenAI)"]
+    MOD --> CHAT["ChatService\n(история, sliding window)"]
+    CHAT --> RAG["RAGService\nQdrant retrieval → reranker → score-guard"]
+    CHAT --> AGENT["Agent graph (LangGraph)\ncheckpointer + HIL"]
+    RAG --> QDRANT[(Qdrant\nfinpay_kb)]
+    AGENT --> TOOLS["search_knowledge_base /\nget_current_time /\nsend_telegram_message"]
+    TOOLS --> RAG
+    AGENT --> PG[(Postgres\nchat + checkpoints)]
+    CHAT --> PG
+    CHAT --> REDIS[(Redis\nresponse cache)]
+    API --> PHOENIX["Phoenix\n(OpenTelemetry-трейсинг)"]
+```
+
+Запрос идёт: пользователь (Telegram-бот или напрямую REST) → модерация входа
+→ `ChatService` собирает контекст истории → либо прямой RAG-ответ
+(`/rag/query`, одноразовый вопрос-ответ), либо агентный граф (`/agent/stream`,
+LangGraph, tool calling + HIL) → LLM (Groq, OpenAI-совместимый API) → ответ с
+цитированием источников `[1]`, `[2]`. Состояние диалога и чекпоинты агента —
+в Postgres (переживают рестарт контейнера), ответы кешируются в Redis, весь
+путь запроса виден в Phoenix через OpenTelemetry.
+
+Подробные ADR и обоснования решений — [`docs/architecture.md`](docs/architecture.md).
 
 ## Быстрый старт
 
@@ -38,35 +71,39 @@ OPENAI__MODEL=openai/gpt-oss-120b \
 uv run main.py
 ```
 
-### Ключевые параметры конфига
+### Таблица переменных окружения
 
-```bash
-OPENAI__API_KEY=                              # ключ провайдера
-OPENAI__HOST=https://api.groq.com/openai/v1
-OPENAI__MODEL=openai/gpt-oss-120b
+| Переменная | По умолчанию | Описание |
+|---|---|---|
+| `OPENAI__API_KEY` | — (обязательно) | Ключ провайдера. Groq API key (console.groq.com), не ключ OpenAI |
+| `OPENAI__HOST` | `https://api.groq.com/openai/v1` | Base URL — Groq отдаёт OpenAI-совместимый API |
+| `OPENAI__MODEL` | `openai/gpt-oss-120b` | Продакшен-модель (генерация, агент) |
+| `REDIS__URL` | `redis://localhost:6379` | Кеш ответов |
+| `REDIS__TTL` | `3600` | TTL кеша, секунд |
+| `CHAT__REPOSITORY` | `json` | `json` (файловое) \| `postgres` |
+| `CHAT__DATABASE_URL` | `postgresql+asyncpg://postgres:postgres@localhost:5432/finpay` | asyncpg-URL для SQLAlchemy (чат) |
+| `CHAT__CONTEXT_WINDOW` | `10` | N последних сообщений в контексте |
+| `CHAT__RAG_CONDENSE_ENABLED` | `true` | Переписывать follow-up в самостоятельный вопрос перед retrieval |
+| `BOT__TOKEN` | — (обязательно для бота) | Токен от @BotFather |
+| `BOT__ADMIN_IDS` | `[]` | Telegram user_id с доступом к `/stats`/`/broadcast` и подтверждению HIL-действий |
+| `BOT__INTERNAL_TOKEN` | — | Секрет backend → bot (`/notify`) |
+| `QDRANT_API_KEY` | — | Секрет Qdrant (контейнер + клиент) |
+| `QDRANT__URL` | `http://localhost:6333` | Хостовое значение; в Docker хардкожено `http://qdrant:6333` |
+| `QDRANT__COLLECTION` | `documents` | Legacy-коллекция (Б5.2); прод использует `RAG__KB_COLLECTION=finpay_kb` |
+| `EMBEDDINGS__DIM` | `768` | Размерность вектора (`intfloat/multilingual-e5-base`) |
+| `RAG__RERANKER_ENABLED` | `true` | BAAI/bge-reranker-v2-m3 после retrieval |
+| `RAG__SCORE_THRESHOLD` | `0.005` | Порог "не найдено" после re-ranking |
+| `AGENT__CHECKPOINTER` | `sqlite` | `memory` (тесты) \| `sqlite` (локально) \| `postgres` (прод) |
+| `AGENT__POSTGRES_URI` | `postgresql://postgres:postgres@localhost:5433/finpay` | psycopg (v3) DSN для чекпоинтера — НЕ `CHAT__DATABASE_URL` |
+| `CORS_ORIGINS` | `["http://localhost:3000"]` | Разрешённые origin для REST API |
+| `SECURITY_ENABLED` | `true` | Prompt-injection защита |
+| `ADMIN_TOKEN` | — | Секрет `/chats/admin/*` |
+| `MODERATION__ENABLED` | `true` | Keyword-модерация (всегда дёшево включена) |
+| `MODERATION__USE_OPENAI_API` | `false` | Второй слой — `omni-moderation-latest` |
+| `EVAL__TESTSET_LLM_API_KEY` | — | Настоящий OpenAI-ключ, только для `scripts/generate_testset.py` |
 
-REDIS__URL=redis://localhost:6379
-REDIS__TTL=3600                               # секунд, TTL кеша ответов
-
-CHAT__REPOSITORY=json                         # "json" | "postgres"
-CHAT__STORAGE_DIR=./var                       # папка для JSON-хранилища
-CHAT__CONTEXT_STRATEGY=sliding                # стратегия контекста
-CHAT__CONTEXT_WINDOW=10                       # N последних сообщений
-CHAT__DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5433/finpay
-
-BOT__TOKEN=                                   # токен от @BotFather
-BOT__BACKEND_URL=http://localhost:8000        # адрес REST API
-BOT__BOT_URL=http://localhost:9000            # backend -> bot: базовый URL для /notify
-BOT__INTERNAL_TOKEN=                          # секрет для /notify
-BOT__BOT_API_PORT=9000                        # порт внутреннего API бота
-BOT__ADMIN_IDS=[]                             # Telegram user_id с доступом к /stats, /users, /broadcast
-
-MODERATION__ENABLED=true                      # false — отключить модерацию целиком
-MODERATION__USE_OPENAI_API=false              # true — включить omni-moderation-latest
-
-SECURITY_ENABLED=true                         # false — отключить security-слой
-ADMIN_TOKEN=                                  # секрет для /chats/admin/* (ADMIN_TOKEN)
-```
+Полный и всегда актуальный список — `.env.example` (значения-заглушки вместо
+секретов).
 
 ## Режимы запуска
 
@@ -81,41 +118,36 @@ uv run main.py bot    # Telegram-бот
 
 ### Локально (без Docker)
 
-Требуется запущенный Redis:
+Требуется запущенный Redis и Qdrant:
 
 ```bash
 redis-server --daemonize yes
+docker compose up -d qdrant   # либо локальный Qdrant
 
 uv run main.py rest
 ```
 
 ### Docker Compose (рекомендуется)
 
-Поднимает FastAPI + Telegram-бот + Redis + PostgreSQL одной командой (backend
-использует Postgres по умолчанию, миграции применяются автоматически при
-старте `app`):
+Поднимает FastAPI + Telegram-бот + Redis + PostgreSQL + Qdrant + Phoenix одной
+командой (backend использует Postgres по умолчанию, миграции применяются
+автоматически при старте `app`):
 
 ```bash
-export OPENAI__API_KEY=gsk_...
-export OPENAI__HOST=https://api.groq.com/openai/v1
-export OPENAI__MODEL=llama-3.3-70b-versatile
-
-# Секреты — генерируются локально, в репозиторий не коммитятся
-export BOT__TOKEN=123456:ABC-...              # токен от @BotFather
-export BOT__INTERNAL_TOKEN=$(openssl rand -hex 16)   # backend -> bot /notify
-export ADMIN_TOKEN=$(openssl rand -hex 16)           # доступ к /chats/admin/*
+cp .env.example .env
+# отредактировать .env: OPENAI__API_KEY (обязательно), BOT__TOKEN (если нужен бот)
 
 docker compose up -d --build
 ```
 
-`pg_data` — именованный volume, данные Postgres переживают `docker compose down`
-(без флага `-v`).
+`pg_data`/`qdrant_storage`/`redis_data` — именованные volumes, данные
+переживают `docker compose down` (без флага `-v`).
 
 Остановка:
 
 ```bash
 docker compose down       # сохранить данные
-docker compose down -v    # удалить volumes Redis и Postgres
+docker compose down -v    # удалить все volumes
 ```
 
 ### Проверка
@@ -157,6 +189,7 @@ uv run alembic upgrade head
 | `POST` | `/chats/{id}/system-message` | Демо: фоновая задача завершилась (+ опциональный `/notify` в Telegram) |
 
 Мультимодальность (фото/голос/PDF/DOCX) и формат SSE-событий — подробнее в [`docs/chat.md`](docs/chat.md).
+RAG внутри чата (retrieval, score-guard, событие `sources`) — [`docs/rag.md`](docs/rag.md).
 
 ## Telegram-бот
 
@@ -168,7 +201,9 @@ uv run alembic upgrade head
 
 Бот также поднимает внутренний HTTP-эндпоинт `POST /notify` (порт
 `bot.bot_api_port`, защищён заголовком `X-Internal-Token`) — backend
-использует его для проактивных уведомлений (см. `app/services/notifier.py`).
+использует его для проактивных уведомлений (см. `app/services/notifier.py`)
+и для реальной отправки сообщений агентом после HIL-подтверждения (см. раздел
+«Агенты» ниже).
 
 ### Запуск бота
 
@@ -187,6 +222,128 @@ REST API должен быть запущен отдельно:
 uv run main.py rest
 ```
 
+## База знаний и RAG (М5)
+
+`app/services/rag.py::RAGService` — LlamaIndex + Qdrant: retrieval (top-k) →
+опциональный re-ranking (`BAAI/bge-reranker-v2-m3`, `app/services/reranker.py`)
+→ код-гард по итоговому score ДО вызова LLM → генерация с нумерованными
+цитатами `[1]`, `[2]`. Параллельная bare-metal реализация без re-ranking/
+цитат/score-guard-до-LLM — исторический baseline Б5.3,
+`app/services/rag_baremetal.py` (сравнение — `docs/rag.md`).
+
+**Корпус** — `data/<категория>/` (tariffs, support, security, api, webhooks,
+legal, compliance, onboarding, incidents, integrations), ~22 документа →
+коллекция Qdrant `finpay_kb`. Индексация — `scripts/ingest.py`
+(`IngestionPipeline` + `DocstoreStrategy.UPSERTS`, идемпотентно: повторный
+запуск не плодит дубликаты, определяет изменённые/неизменные документы по
+хешу).
+
+**Чанкинг** — `app/services/chunking.py`, три стратегии (`fixed_size`,
+`recursive`, `semantic`); `semantic` победил в grid search на golden dataset
+(`docs/chunking_experiment.md`, MRR@10 0.917 vs равные Hit Rate/Recall).
+
+```bash
+# Индексация базы знаний (идемпотентно)
+uv run scripts/ingest.py
+
+# Прямой вопрос к базе (без агента/чата)
+curl -X POST http://localhost:8000/rag/query \
+  -H 'Content-Type: application/json' \
+  -d '{"question":"Какая стандартная комиссия за транзакцию?"}'
+```
+
+Обоснование метрики Qdrant (cosine vs dot), HNSW-параметров и фильтров —
+[`docs/vector_store.md`](docs/vector_store.md).
+
+## Агенты (М6)
+
+Прогрессия агентного слоя от простого к прод-готовому — все версии оставлены
+в `app/services/` как исторические срезы (не удалялись при переходе к
+следующей):
+
+| Модуль | Блок | Что добавляет |
+|---|---|---|
+| `agent_naive.py` | Б6.1 | Голый `for`-цикл tool-calling, 3 tools |
+| `agent_react.py` | Б6.2 | ReAct + self-reflection (Reflexion-light critic), жёсткие лимиты (`max_iterations`, `timeout`) |
+| `agent_graph.py` | Б6.3 | Тот же ReAct на LangGraph `StateGraph` (`custom_graph`) + `create_agent` (`prebuilt_graph`) для сравнения |
+| `agent_persistent.py` | Б6.4 | + checkpointer (sqlite/postgres) — диалог переживает рестарт; + human-in-the-loop (`interrupt()`+`Command(resume=...)`) на реальной отправке в Telegram; + SSE-стриминг |
+
+**Инструменты**: `search_knowledge_base` (обёртка над `RAGService`),
+`get_current_time`, `send_telegram_message` — единственный опасный (реальный
+внешний side-effect), поэтому единственный, требующий подтверждения
+пользователя перед выполнением.
+
+```bash
+# SSE-стрим агента с HIL
+curl -N -X POST http://localhost:8000/agent/stream \
+  -H 'Content-Type: application/json' \
+  -d '{"thread_id":"demo-1","input":{"messages":[{"role":"user","content":"Отправь клиенту в чат 123 сводку по тарифам"}]}}'
+
+# После получения __interrupt__ в потоке — подтверждение тем же thread_id
+curl -N -X POST http://localhost:8000/agent/stream \
+  -d '{"thread_id":"demo-1","input":{"resume":true}}'
+```
+
+Отчёты по каждому шагу с реальными числами (latency/токены/баги, найденные
+при отладке) — [`docs/agent-react-report.md`](docs/agent-react-report.md),
+[`docs/agent-graph-report.md`](docs/agent-graph-report.md),
+[`docs/agent-persistent-report.md`](docs/agent-persistent-report.md). Схемы
+графов — `docs/agent-graph-custom.mmd`/`.png`.
+
+Более ранний, отдельный от RAG-агента набор function-calling инструментов
+(`app/tools/` — `get_payment_system_status`, `check_transaction_status`) —
+демо простого tool-calling без LangGraph из ранних блоков курса, оставлен как
+референс, в проде не используется.
+
+### Мультиагентность: решение — не используется (Б6.5)
+
+Сравнение supervisor-графа (researcher+writer, LangGraph) с single-agent
+baseline на одинаковых 5 вопросах и одном tool — `experiments/`. Итог:
+качество не выросло в среднем (4.4/5 у обоих), стоимость выросла в 8.6× по
+токенам и в 29.9× по медианной задержке, а на тривиальном вопросе
+координация улетела в 25 LLM-вызовов и ответ на английском вместо русского.
+Полное обоснование и решение — [`docs/multi-agent-report.md`](docs/multi-agent-report.md).
+Финальный agent-слой — single-agent (`agent_persistent.py`), `experiments/`
+остаётся прототипной площадкой, не переехал в прод.
+
+## Оценка качества (eval)
+
+Два независимых уровня, не путать:
+
+**Качество RAG (RAGAS), актуальный отчёт** — `tests/eval/golden_dataset.json`
+(36 вопросов, вручную проверенных на дословное соответствие корпусу) +
+`scripts/run_eval.py` (Faithfulness/AnswerRelevancy/ContextPrecision/
+ContextRecall/`has_citation`, судья — отдельная от прод модель через Groq).
+Полный разбор методологии, найденных багов (14 штук) и отклонений от
+задания — [`docs/rag_evaluation.md`](docs/rag_evaluation.md). **Честно**: на
+момент этого README прогон не завершён (упирались в дневную квоту Groq) —
+итоговые числа по всем 36 строкам и обоим A/B-экспериментам (chunking,
+reranker on/off) — открытый пункт, см. «Ограничения» ниже.
+
+```bash
+uv run scripts/run_eval.py --label baseline
+```
+
+**Общий G-Eval harness (ранний, не RAG-специфичный)** — `eval/` (блок ~3-4):
+
+```bash
+uv run python eval/run_evaluation.py \
+  --golden eval/golden_dataset.json --judge gpt-4o-mini \
+  --out eval/runs/$(date +%Y-%m-%d).json
+uv run python eval/check_thresholds.py   # CI-порог, eval/thresholds.yaml
+```
+
+## Наблюдаемость
+
+Все запросы трассируются через OpenTelemetry в Arize Phoenix
+(`compose.yaml`, порт `6006` UI / `4317` gRPC-коллектор) —
+`app/observability/tracing.py` инструментирует OpenAI- и LlamaIndex-вызовы.
+PII маскируется до записи в логи/трейсы (`app/observability/pii.py`).
+
+```bash
+open http://localhost:6006
+```
+
 ## Production-обвязка (Б4.4)
 
 ### Модерация (`app/moderation/`)
@@ -195,7 +352,7 @@ uv run main.py rest
 
 1. keyword/regex по `app/moderation/moderation_keywords.yaml` (дёшево, включён всегда);
 2. опционально OpenAI Moderation API (`omni-moderation-latest`) — включается
-   флагом `[moderation] use_openai_api = true`.
+   флагом `MODERATION__USE_OPENAI_API=true`.
 
 Вход проверяется до старта SSE-стрима: заблокированный запрос — `403` с
 `detail.code == "moderation_blocked"`. Выход проверяется на собранном полном
@@ -222,7 +379,7 @@ uv run main.py rest
 
 ### Admin-команды бота
 
-Доступны только `message.from_user.id` из `[bot] admin_ids` (фильтр `IsAdmin`
+Доступны только `message.from_user.id` из `BOT__ADMIN_IDS` (фильтр `IsAdmin`
 на уровне роутера — не внутри хендлеров):
 
 ```
@@ -243,112 +400,6 @@ uv run main.py rest
 пользователя по тому же сообщению просто игнорируется), после чего бот
 убирает клавиатуру через `edit_reply_markup(reply_markup=None)`.
 
-## Эмбеддинги (М5.1)
-
-`app/services/embeddings.py` — переиспользуемый сервис эмбеддингов для
-дипломного RAG-ассистента: self-hosted `intfloat/multilingual-e5-base`
-(sentence-transformers, CPU) — текст обращений не уходит во внешний API, что
-важно для финтех-домена (см. `ADR-003` в [`docs/architecture.md`](docs/architecture.md)).
-
-Публичный интерфейс: `embed_texts(texts)`, а также асимметричные
-`embed_query(text)` / `embed_documents(texts)` с префиксами `query:`/`passage:`
-(E5-модель). Батчинг (`batch_size=32`), диск-кеш (`diskcache`, инвалидируется
-при смене модели), retry на ошибки загрузки модели (`tenacity`).
-
-Модель (~1.1GB) скачивается с HuggingFace при первом использовании — ключи и
-оплата не нужны.
-
-```bash
-# Оценка времени индексации на реальном корпусе проекта (self-hosted — $0 API)
-uv run scripts/estimate_embedding_cost.py
-
-# Смоук-тест: латентность кеша + деградация score без query:/passage: префиксов
-uv run scripts/embeddings_smoke.py
-```
-
-Mini-benchmark (`query`/`relevant`/`irrelevant`) — [`tests/eval/mini_benchmark.json`](tests/eval/mini_benchmark.json).
-
-## Векторное хранилище (М5.2)
-
-Qdrant — сервис `qdrant` в `compose.yaml` (порт `6333` REST/дашборд, `6334`
-gRPC, volume `qdrant_storage`). `app/services/vector_store.py::VectorStore` —
-тонкая асинхронная обёртка над `AsyncQdrantClient` (`ensure_collection` /
-`upsert` / `search`), клиент создаётся один раз в `app/lifespan.py` и живёт в
-`app.state` (как Redis) — если Qdrant недоступен при старте, поиск отключается
-без падения приложения. На блоке 5.3 эта обёртка подменяется на LlamaIndex
-`QdrantVectorStore` без изменения интерфейса.
-
-```bash
-# Поднять Qdrant (нужен .env — см. .env.example)
-docker compose up -d qdrant
-
-# Дашборд
-open http://localhost:6333/dashboard
-
-# Загрузить базу знаний (118 чанков, идемпотентно — повторный запуск без дублей)
-uv run scripts/load_to_qdrant.py
-
-# cosine vs dot + 3 примера фильтров (match/range/must+must_not) → docs/vector_store.md
-uv run scripts/qdrant_experiments.py
-```
-
-Детали, обоснование метрики и HNSW-параметров — [`docs/vector_store.md`](docs/vector_store.md).
-
-## Инструменты (function calling)
-
-| Tool | Описание |
-|------|----------|
-| `get_payment_system_status(component)` | Статус компонентов платёжной системы |
-| `check_transaction_status(transaction_id)` | Статус транзакции из локальной SQLite |
-
-## Тесты
-
-```bash
-# Все тесты (без вызовов LLM и без Docker)
-uv run pytest tests/ -m "not llm" -v
-
-# Только chat-модуль (Postgres-тесты пропускаются без Docker)
-uv run pytest tests/chat/ -v
-
-# Только бот
-uv run pytest tests/bot/ -v
-
-# Только security-тесты
-uv run pytest tests/unit/test_security.py -v
-
-# С реальным LLM (требует API-ключ)
-uv run pytest tests/ -m llm -v
-```
-
-Postgres-тесты в `tests/chat/` автоматически пропускаются (`s`) если Docker недоступен.
-
-## Оценка качества (eval)
-
-### Прогон на golden dataset
-
-```bash
-uv run python eval/run_evaluation.py \
-  --golden eval/golden_dataset.json \
-  --judge  gpt-4o-mini \
-  --out    eval/runs/$(date +%Y-%m-%d).json
-```
-
-Результат сохраняется в `eval/runs/<YYYY-MM-DD>.json`.
-
-### Проверка порогов (CI)
-
-```bash
-# Читает последний файл из eval/runs/, завершается с exit 1 при нарушении
-uv run python eval/check_thresholds.py
-```
-
-Пороги задаются в `eval/thresholds.yaml`:
-
-```yaml
-correctness_avg: 4.0   # средняя оценка правильности по всем вопросам
-min_correctness: 2.0   # минимально допустимая оценка для одного вопроса
-```
-
 ## Security-тестирование (garak)
 
 Тестирование ведётся в два прогона: baseline (без защиты) и after (с защитой).
@@ -359,15 +410,9 @@ Garak обращается к серверу через throttle-прокси, �
 `eval/security/throttle_proxy.py` — тонкий reverse-proxy между garak и сервисом.
 Слушает на `:8001`, форвардит на `:8000`.
 
-**Зачем нужен:** garak шлёт ~255 запросов на три пробы. Free-tier Groq/xAI имеет лимит
-~6 000 TPM, а DAN-промпты весят ~900 токенов каждый — при неограниченной скорости
-сразу летят 429.
-
-**Как считать RPM под свой лимит:**
-```
-RPM = TPM_limit / avg_tokens_per_request
-# Groq free tier, llama-3.1-8b-instant: 6000 / 900 ≈ 5 RPM
-```
+**Зачем нужен:** garak шлёт ~255 запросов на три пробы. Free-tier Groq имеет
+лимит по токенам в минуту, а DAN-промпты весят ~900 токенов каждый — при
+неограниченной скорости сразу летят 429.
 
 **Параметры:**
 
@@ -391,7 +436,7 @@ OTEL_TRACES_EXPORTER=none uv run main.py
 # Терминал 1 — сервер без security-слоя
 SECURITY_ENABLED=false uv run main.py
 
-# Терминал 2 — throttle-прокси (:8001 → :8000), для Groq free tier --rpm 5
+# Терминал 2 — throttle-прокси (:8001 → :8000)
 uv run python eval/security/throttle_proxy.py --rpm 5
 
 # Терминал 3 — garak
@@ -427,13 +472,8 @@ Garak сохраняет результаты в `~/.local/share/garak/garak_run
 После каждого прогона скопировать в проект:
 
 ```bash
-# После baseline
-cp ~/.local/share/garak/garak_runs/baseline.* \
-   docs/security/reports/baseline/
-
-# После after
-cp ~/.local/share/garak/garak_runs/after.* \
-   docs/security/reports/after/
+cp ~/.local/share/garak/garak_runs/baseline.* docs/security/reports/baseline/
+cp ~/.local/share/garak/garak_runs/after.* docs/security/reports/after/
 ```
 
 Извлечь attack_success_rate по пробам:
@@ -445,105 +485,114 @@ cat ~/.local/share/garak/garak_runs/baseline.report.jsonl \
 
 Шаблоны отчётов: `docs/security/garak_baseline_2026-06-20.md`, `docs/security/garak_after_2026-06-20.md`.
 
+## Тесты
+
+```bash
+# Все тесты (без вызовов LLM и без Docker)
+uv run pytest tests/ -m "not llm" -v
+
+# Только chat-модуль (Postgres-тесты пропускаются без Docker)
+uv run pytest tests/chat/ -v
+
+# Только агенты (checkpointer/HIL — на InMemorySaver/AsyncSqliteSaver(:memory:), без Postgres)
+uv run pytest tests/test_agent_persistent.py tests/unit/test_agent_*.py -v
+
+# Только бот
+uv run pytest tests/bot/ -v
+
+# Только security-тесты
+uv run pytest tests/unit/test_security.py -v
+
+# С реальным LLM (требует API-ключ)
+uv run pytest tests/ -m llm -v
+```
+
+Postgres-тесты автоматически пропускаются (`s`) если Docker недоступен.
+
+## Ограничения и известные пробелы
+
+Честно, без приукрашивания:
+
+- **RAG-эвал (RAGAS) не доведён до конца** — 12 из 36 строк golden dataset с
+  реальными числами, оба A/B-эксперимента (chunking, reranker on/off)
+  подготовлены, но не прогнаны до конца — упирались в дневную квоту Groq на
+  бесплатном тарифе, не в технические ограничения (пайплайн работает,
+  проверено на частичных данных). Детали — `docs/rag_evaluation.md`.
+- **Мультиагентность сознательно не используется** — не пробел, а
+  обоснованное решение по итогам сравнения (см. «Агенты» выше), но лежит
+  готовый прототип на случай, если для развития проекта decomposition
+  когда-нибудь окупится.
+- **`user_role="read-only"` в агенте** — параметр политики доступа объявлен
+  (`app/services/agent_persistent.py`), но реально влияет пока только на
+  пропуск HIL для роли `full`; отдельного enforcement-узла, блокирующего ЛЮБОЙ
+  tool-вызов для `read-only`, нет — актуально только при добавлении второго
+  опасного tool.
+- **Coordination overhead агента непредсказуем в худшем случае** — на
+  тривиальном запросе supervisor-граф (эксперимент Б6.5) один раз ушёл в 25
+  LLM-вызовов вместо ожидаемых 5 — нет бюджетного гарда на число хендоффов.
+- **`_send_real_telegram` создаёт новый `aiogram.Bot` на каждый вызов** —
+  рабочее, но не самое экономное решение; для высокой частоты HIL-действий
+  стоило бы держать один `Bot` в `app.state`.
+- **Поведение при недоступности Groq**: RAG/чат — деградация без падения
+  (сервис поднимается, retrieval работает, генерация вернёт ошибку на
+  конкретный запрос); агентные `/agent/stream`-вызовы — сетевые ошибки от
+  `httpx`/`openai` пробрасываются наверх без отдельного retry-слоя поверх
+  встроенных ретраев SDK.
+
 ## Структура проекта
 
 ```
 app/
-  chat/             # M4Б1/Б4.3/Б4.4: история диалогов, мультимодальность, модерация
-    domain.py         # Pydantic-модели (Chat, ChatMessage + media_refs/latency_ms)
-    repository.py     # Protocol-контракт хранилища
-    repositories/
-      json_repo.py    # JSONL-файловое хранилище
-      pg_repo.py      # PostgreSQL (async SQLAlchemy 2.x)
-      pg_models.py    # ORM-модели + миграция
-    context.py        # tiktoken, sliding window
-    media.py          # MIME-диспатч: image_url / Whisper-1 / pypdf / python-docx
-    service.py        # ChatService + SSE-генератор + модерация + latency
-    routes.py         # /chats endpoints (multipart, /system-message, /feedback)
-    deps.py           # FastAPI Depends
+  chat/             # M4Б1/Б4.3/Б4.4: история диалогов, мультимодальность, модерация, RAG в чате (Б5.5)
   moderation/       # Б4.4: keyword-слой + опционально OpenAI Moderation API
-    service.py        # ModerationService, ModerationResult
-    moderation_keywords.yaml
   admin/            # Б4.4: /chats/admin/* (только Postgres)
-    routes.py         # stats/users/broadcast(+pending/ack)
-    deps.py           # require_admin через X-Admin-Token
   bot/              # M4Б2/Б4.3/Б4.4: Telegram-бот
-    handlers/
-      admin.py        # /stats /users /broadcast, фильтр IsAdmin
-      feedback.py     # callback fb:<vote>:<message_id>
-      fsm.py          # /ask FSM-сценарий (aiogram 3)
-      text.py         # текстовые сообщения → sendMessageDraft-стрим
-      media.py        # фото/голос/аудио/документы
-    keyboards/
-      inline.py       # клавиатура выбора темы
-      feedback.py     # клавиатура 👍/👎
-    services/
-      backend_client.py  # httpx-клиент (multipart + JSON SSE + admin), retry, таймауты
-      streaming.py        # sendMessageDraft-стриминг, friendly_error
-      broadcast.py         # фоновый пул broadcast_queue
-    web.py            # внутренний FastAPI: POST /notify
-    states.py         # AskFlow StatesGroup
-  routers/          # FastAPI endpoints (/chat, /health, /models)
+  routers/          # FastAPI endpoints: chat, health, models, rag (Б5.3), agent (Б6.4), documents
   services/
-    llm.py          # оркестрация LLM + tool calls
-    notifier.py     # backend -> bot: POST /notify
-    embeddings.py   # М5.1: embed_texts — батчинг, retry, диск-кеш
-    vector_store.py # М5.2: VectorStore — обёртка над AsyncQdrantClient
-    security/       # input_validator, output_filter
-  deps/
-    providers.py    # FastAPI Depends: get_llm_service, get_vector_store, ...
-  llm/client.py     # AsyncOpenAI-клиент
-  prompts/          # Jinja2-шаблоны системного промпта
-  tools/            # handlers и схемы для function calling
-  schemas/          # Pydantic-модели запросов и ответов
-  observability/    # structlog + OpenTelemetry + PII-маскирование
-  settings/         # pydantic-settings, .env + реальные env-переменные
-    chat.py           # ChatSettings
-    bot.py            # BotSettings
-    moderation.py     # ModerationSettings
-    embeddings.py     # EmbeddingsSettings (М5.1)
-    qdrant.py         # QdrantSettings (М5.2)
+    llm.py, notifier.py                 # оркестрация LLM, backend -> bot уведомления
+    embeddings.py, vector_store.py      # М5.1/М5.2
+    rag.py, rag_baremetal.py            # Б5.3-5.5: RAGService (LlamaIndex+Qdrant+reranker+citations)
+    chunking.py, reranker.py, ingestion.py  # Б5.4/Б5.5: стратегии чанкинга, re-ranking, индексация
+    retrieval_eval.py                   # вспомогательное для оценки retrieval
+    agent_naive.py                      # Б6.1: наивный tool-calling loop
+    agent_react.py                      # Б6.2: ReAct + self-reflection
+    agent_graph.py                      # Б6.3: тот же ReAct на LangGraph
+    agent_persistent.py                 # Б6.4: + checkpointer + HIL + SSE
+    security/                           # input_validator, output_filter
+  deps/providers.py   # FastAPI Depends: get_llm_service, get_vector_store, get_agent_graph, ...
+  tools/              # ранние function-calling демо-инструменты (до RAG-агента)
+  prompts/            # Jinja2-шаблоны системного промпта
+  schemas/            # Pydantic-модели запросов и ответов
+  observability/      # structlog + OpenTelemetry + PII-маскирование
+  settings/           # pydantic-settings, .env — по модулю на область (agent.py — Б6.4)
 
-modes/
-  rest.py           # uvicorn-сервер
-  bot.py            # aiogram polling + internal API + broadcast worker
+experiments/        # Б6.5: supervisor multi-agent vs single-agent, прототип, не в проде
+  common.py, multi_agent_langgraph.py, single_agent_baseline.py, results.json
+
+modes/               # rest.py (uvicorn), bot.py (aiogram polling)
 
 scripts/
-  estimate_embedding_cost.py  # М5.1: время индексации на реальном корпусе
-  embeddings_smoke.py         # М5.1: кеш + деградация score без E5-префиксов
-  load_to_qdrant.py           # М5.2: идемпотентная загрузка базы знаний
-  qdrant_experiments.py       # М5.2: cosine vs dot + 3 примера фильтров
+  ingest.py, load_to_qdrant.py, qdrant_experiments.py       # М5.2/М5.5: индексация, эксперименты
+  chunking_experiment.py, generate_testset.py, run_eval.py  # Б5.4/Б5.6: чанкинг, golden dataset, RAGAS
+  run_naive_agent.py, run_agent_comparison.py, bench_agents.py  # Б6.1-6.3: прогоны и бенчмарки агентов
+  visualize_graph.py, time_travel_demo.py                   # Б6.3/Б6.4: mermaid-схемы, time travel
+  estimate_embedding_cost.py, embeddings_smoke.py           # М5.1
 
-alembic/
-  versions/
-    0001_chat_tables.py               # таблицы chats + chat_messages
-    0002_add_media_refs.py            # chat_messages.media_refs (JSONB)
-    0003_moderation_feedback_broadcast.py  # message_feedback, moderation_incidents,
-                                            # broadcast_queue, chat_messages.latency_ms
+alembic/versions/    # миграции: chat-таблицы, media_refs, moderation/feedback/broadcast
+                     # (checkpoint*-таблицы Б6.4 создаёт AsyncPostgresSaver.setup(), не Alembic —
+                     #  alembic/env.py::include_name явно исключает их из autogenerate)
 
-eval/
-  golden_dataset.json     # 26 вопросов, 4 категории
-  run_evaluation.py       # G-Eval judge CLI
-  check_thresholds.py     # CI-проверка порогов
-  thresholds.yaml
-  security/
-    rest_config.json      # конфиг garak REST target (:8001)
-    throttle_proxy.py     # rate-limiting прокси
-
+eval/                # ранний G-Eval harness (не RAG-специфичный) + throttle_proxy для garak
 tests/
-  unit/             # legacy unit-тесты + test_moderation.py + test_embeddings.py + test_vector_store.py
-  chat/             # тесты репозиториев, сервиса, маршрутов, фидбека, модерации
-  admin/            # тесты /chats/admin/* (auth без БД + testcontainers Postgres)
-  bot/              # тесты FSM, BackendClient, admin-команд, feedback, broadcast
-  integration/
-    test_vector_store_live.py  # М5.2: живой smoke-тест через testcontainers.qdrant
-  eval/
-    mini_benchmark.json  # М5.1: 5-10 пар (query, relevant, irrelevant)
-  conftest.py
+  unit/, chat/, admin/, bot/, integration/   # по модулям
+  eval/                                       # golden_dataset.json (36 Б5.6), mini_benchmark.json (М5.1)
+  test_agent_persistent.py                    # Б6.4: HIL smoke-тесты на AsyncSqliteSaver(:memory:)
 
 docs/
-  chat.md           # архитектура чат-модуля
-  architecture.md   # ADR-001..003 (взаимодействие, fault tolerance, embedding-модель)
-  vector_store.md   # М5.2: метрика cosine/dot, фильтры, HNSW
-  security/         # garak-отчёты baseline и after
+  architecture.md, chat.md, vector_store.md, chunking_experiment.md   # М5
+  rag.md, rag_evaluation.md, data_inventory.md                        # Б5.3-5.6
+  agent-react-report.md, agent-graph-report.md, agent-persistent-report.md,
+  agent-graph-custom.mmd/.png                                         # Б6.2-6.4
+  multi-agent-report.md, architecture-multi-agent.md                  # Б6.5
+  security/                                                           # garak-отчёты baseline и after
 ```
